@@ -14,6 +14,8 @@ from src.utils.utils import retry_with_backoff,choose_optimal_format,restore_ori
 from src.db.model_service import ModelService
 from src.ai.forecast_spec_generator import ForecastSpecGenerator
 from src.aggregator.forecast_aggregator import prepare_forecast_data,validate_and_fix_forecast_spec
+from src.ai.summary_spec_generator import SummarySpecGenerator
+from src.aggregator.summary_aggregator import aggregate_for_summary
 
 
 class GeminiService:
@@ -22,7 +24,7 @@ class GeminiService:
         self.model_service = model_service
         self.enabled = model_service.is_available()
     
-    def generate_summary(self, user_query: str, rows: List[Dict]) -> str:
+    def generate_summary_1(self, user_query: str, rows: List[Dict]) -> str:
         """Generate executive summary report using Gemini."""
         if not self.enabled:
             print("[SUMMARY] Gemini disabled")
@@ -912,3 +914,185 @@ class GeminiService:
                 "error": f"⚠️ Chart generation error: {str(e)}"
             }
 
+
+    def generate_summary(self, user_query: str, rows: List[Dict]) -> str:
+        """Generate executive summary report using Gemini with intelligent aggregation."""
+        if not self.enabled:
+            print("[SUMMARY] Gemini disabled")
+            return "⚠️ AI summary generation is currently disabled."
+
+        if not rows:
+            print("[SUMMARY] No rows")
+            return "⚠️ No data available for summary."
+
+        print(f"[SUMMARY] 📊 Starting summary generation with {len(rows)} rows")
+        print(f"[SUMMARY] User query: {user_query}")
+
+        try:
+            # Step 1: Generate aggregation spec
+            print("[SUMMARY] Step 1: Generating aggregation spec...")
+            spec_gen = SummarySpecGenerator(self.model_service)
+            available_columns = list(rows[0].keys())
+            sample_rows = rows[:3]
+            
+            spec = spec_gen.generate_spec(
+                user_query=user_query,
+                available_columns=available_columns,
+                field_types=FIELD_TYPES,
+                sample_rows=sample_rows
+            )
+            
+            print(f"[SUMMARY] ✅ Spec generated: {json.dumps(spec, indent=2)}")
+            
+            
+
+            # Step 2: Aggregate the data
+            print(f"[SUMMARY] Step 2: Aggregating {len(rows)} rows...")
+            aggregated_summary = aggregate_for_summary(
+                rows=rows,
+                spec=spec,
+                field_types=FIELD_TYPES
+            )
+            
+            print(f"[SUMMARY] ✅ Aggregated to compact summary")
+            print(f"[SUMMARY] Total records: {aggregated_summary.get('total_records', 0)}")
+
+            # Step 3: Format aggregated summary for model
+            print("[SUMMARY] Step 3: Formatting aggregated data...")
+            summary_json = json.dumps(aggregated_summary, indent=2)
+            data_block = f"AGGREGATED SUMMARY DATA (JSON):\n```json\n{summary_json}\n```"
+            print(f" aggregated summary data : {summary_json}")
+            
+            print(f"[SUMMARY] ✅ Data formatted ({len(summary_json)} chars vs {len(str(rows))} original)")
+
+            # Step 4: Extract metadata
+            num_records = aggregated_summary.get("total_records", len(rows))
+            
+            # Get date range from aggregations
+            date_info = ""
+            time_agg = aggregated_summary.get("aggregations", {}).get("time", {})
+            if isinstance(time_agg, dict) and "date_range" in time_agg:
+                date_range = time_agg["date_range"]
+                if date_range.get("min_date") and date_range.get("max_date"):
+                    date_info = f"\n- Date Range: {date_range['min_date']} to {date_range['max_date']}"
+
+            print(f"[SUMMARY] Records: {num_records}")
+            if date_info:
+                print(f"[SUMMARY] {date_info.strip()}")
+
+            # Step 5: Build summary prompt with aggregated data
+            prompt = f"""You are a senior business intelligence analyst preparing an executive summary report for management.
+
+    CONTEXT:
+    - Dataset: Invoice / Billing / Transaction Records
+    - Total Records: {num_records} invoices{date_info}
+    - Data provided: Pre-aggregated summary with breakdowns by status, provider, cost center, and financial metrics
+    - Always be clear, structured, and professional
+    - Follow the user's intent carefully
+
+    USER REQUEST: "{user_query or 'Provide a comprehensive business summary and insights from this dataset.'}"
+    
+    ABSOLUTE OUTPUT RULES:
+    - Disputed and System Disputed are seprate status of invoices dont combine
+    - Accepted and System Accepted are seprate status of invoices dont combine
+    {data_block}
+
+    ANALYSIS REQUIREMENTS:
+
+    ABSOLUTE OUTPUT RULES:
+    - DO NOT include any title, introduction, greeting, explanation, preface, or metadata
+    (e.g., no "Of course", no To/From/Date/Subject, no *** separators)
+
+    Generate a professional business report aimed at finance and operations leaders with the following sections:
+
+    ## 1. Executive Summary (2–4 sentences)
+    - Briefly describe the dataset scope and time period
+    - Highlight the single most important business finding (e.g., high dispute rate, vendor concentration, cost center exposure)
+    - Reference the aggregated data provided
+
+    ## 2. Status & Risk Overview
+    - Use the "status" aggregation to break down invoice counts and total values by status
+    - Use the "risk" aggregation to quantify disputed,system disputed not verified, and pending invoices
+    - Comment on approval and verification progress and operational risk implications
+    - Clearly quantify how much value is tied up in disputed/pending/problematic invoices
+
+    ## 3. Provider & Service Analysis
+    - Use the "provider" aggregation to identify top providers by spend and count
+    - Calculate and comment on vendor dependency (share of total value for top providers)
+    - If provider count is high, note concentration vs. diversification
+
+    ## 4. Cost Center & Location View
+    - Use the "cost_center" aggregation to list top cost centers/locations by spend
+    - Comment on spending concentration vs. distribution
+    - Cross-reference with risk data if disputes are concentrated in specific locations
+
+    ## 5. Financial Snapshot
+    - Use the "financial" aggregation for:
+    - **Total Billed Value**: total_billed
+    - **Average Invoice Value**: average_invoice
+    - **Invoice Range**: min_invoice to max_invoice
+    - **Total Tax**: total_tax (if available)
+    - **Net Total**: total_net (if available)
+    - Provide 1–2 sentences interpreting spending patterns
+
+    ## 6. Operational & Process Insights
+    - Analyze status and risk aggregations to comment on processing efficiency
+    - Identify recurring patterns in disputes or pending approvals
+    - Note any gaps or inconsistencies in the aggregation data
+
+    ## 7. Risk Factors & Red Flags
+    - Use "risk" aggregation to quantify:
+    - Disputed invoice count, amount, and percentage
+    - Not verified invoice count, amount, and percentage
+    - Pending approval count, amount, and percentage
+    - Call out any high-value outliers visible in the data
+    - Note any data quality issues inferred from the aggregations
+
+    ## 8. Key Recommendations (3–6 bullet points)
+    - Provide concrete, action-oriented recommendations
+    - Include where to focus reviews (specific vendors, locations, cost centers, or statuses)
+    - Suggest opportunities for cost optimization, contract negotiation, or process improvements
+    - Mention any data or system enhancements needed
+
+    FORMATTING RULES:
+    - Use markdown headers (##) for sections exactly as above
+    - Use **bold** for key metrics and numbers
+    - Always include specific numbers and percentages (e.g., "5 of 8 invoices (62.5%)")
+    - Do NOT invent currency symbols; use numeric values only (e.g., "57,372" not "$57,372") unless currency is explicit
+    - Keep each section concise (3–5 sentences or bullet points)
+    - Total length: roughly 400–600 words
+    - Maintain formal, professional business tone
+
+    CRITICAL RULES:
+    - Base ALL statements strictly on the aggregated data provided
+    - NEVER make assumptions or add information not inferrable from the data
+    - If aggregation data is missing for a section, state: "Insufficient data for [section name] analysis."
+    - Compare and contrast instead of just listing numbers
+    - The output should be a single, well-structured markdown report, not code
+
+    Generate the comprehensive report now:"""
+
+            # Step 6: Call model and return result
+            print("[SUMMARY] Step 4: Generating summary report from aggregated data...")
+            
+            def generate():
+                text = self.model_service.generate_text(prompt)
+                if not text or not text.strip():
+                    raise RuntimeError("Empty response from model")
+                return text.strip()
+
+            result_text = retry_with_backoff(generate)
+            
+            if not result_text:
+                return "⚠️ No summary could be generated from the data."
+
+            print(f"[SUMMARY] ✅ Summary generated successfully ({len(result_text)} chars)")
+            print(f"[SUMMARY] 📊 Data reduction: {len(str(rows))} chars → {len(summary_json)} chars ({round(len(summary_json)/len(str(rows))*100, 1)}%)")
+            
+            return result_text
+
+        except Exception as e:
+            print(f"[SUMMARY] ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return f"⚠️ Error generating summary: {str(e)}"
