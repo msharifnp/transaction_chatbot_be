@@ -1,9 +1,3 @@
-"""
-summary_aggregator.py
-Aggregates large invoice datasets into compact summaries using pandas.
-FIXED: Now handles PascalCase, camelCase, and snake_case column names.
-"""
-
 import pandas as pd
 from typing import List, Dict, Any
 
@@ -13,25 +7,7 @@ def aggregate_for_summary(
     spec: Dict[str, Any],
     field_types: Dict[str, str]
 ) -> Dict[str, Any]:
-    """
-    Aggregate invoice data for summary analysis using pandas.
-    
-    Reduces millions of rows to a compact summary dict containing:
-    - Status breakdowns
-    - Top providers
-    - Top cost centers
-    - Financial metrics
-    - Time series
-    - Risk indicators
-    
-    Args:
-        rows: List of invoice records as dicts
-        spec: Aggregation specification from SummarySpecGenerator
-        field_types: Mapping of column names to types (date, number, currency, text)
-        
-    Returns:
-        Compact summary dict with all aggregations
-    """
+   
     if not rows:
         return {"error": "No data to aggregate", "total_records": 0}
     
@@ -88,7 +64,7 @@ def aggregate_for_summary(
                 summary["aggregations"]["time"] = _aggregate_time(df, agg_spec, column_mapping)
             
             elif category == "risk":
-                summary["aggregations"]["risk"] = _aggregate_risk(df, agg_spec, column_mapping)
+                summary["aggregations"]["risk"] = _aggregate_risk_enhanced(df, agg_spec, column_mapping)
             
             print(f"[AGGREGATOR] ✅ Completed {category} aggregation")
                 
@@ -103,19 +79,10 @@ def aggregate_for_summary(
     return summary
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
 def _create_column_mapping(columns: pd.Index) -> Dict[str, str]:
     """
     Create a case-insensitive column mapping.
     Maps lowercase column names to actual column names.
-    
-    Examples:
-        grandtotal -> GrandTotal
-        grand_total -> GrandTotal
-        nettotal -> NetTotal
     """
     mapping = {}
     for col in columns:
@@ -124,16 +91,7 @@ def _create_column_mapping(columns: pd.Index) -> Dict[str, str]:
 
 
 def _get_column_name(spec_column: str, column_mapping: Dict[str, str]) -> str:
-    """
-    Get the actual column name from spec column (case-insensitive).
-    
-    Args:
-        spec_column: Column name from spec (any case)
-        column_mapping: Lowercase to actual column mapping
-        
-    Returns:
-        Actual column name or None if not found
-    """
+    """Get the actual column name from spec column (case-insensitive)."""
     return column_mapping.get(spec_column.lower())
 
 
@@ -142,11 +100,7 @@ def _get_column_name(spec_column: str, column_mapping: Dict[str, str]) -> str:
 # ============================================================================
 
 def _aggregate_status(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> List[Dict]:
-    """
-    Aggregate by invoice status fields.
-    
-    Returns breakdown of invoices by status with counts and totals.
-    """
+    """Aggregate by invoice status fields."""
     group_cols = spec.get("group_by", [])
     
     # Map to actual column names
@@ -177,11 +131,7 @@ def _aggregate_status(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Lis
 
 
 def _aggregate_provider(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> List[Dict]:
-    """
-    Aggregate by provider with top N filtering.
-    
-    Returns top providers by spend.
-    """
+    """Aggregate by provider with top N filtering."""
     group_cols = spec.get("group_by", [])
     
     # Map to actual column names
@@ -219,11 +169,7 @@ def _aggregate_provider(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> L
 
 
 def _aggregate_cost_center(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> List[Dict]:
-    """
-    Aggregate by cost center/location with top N filtering.
-    
-    Returns top cost centers by spend.
-    """
+    """Aggregate by cost center/location with top N filtering."""
     group_cols = spec.get("group_by", [])
     
     # Map to actual column names
@@ -261,11 +207,7 @@ def _aggregate_cost_center(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -
 
 
 def _aggregate_service(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> List[Dict]:
-    """
-    Aggregate by service type with top N filtering.
-    
-    Returns top services by spend.
-    """
+    """Aggregate by service type with top N filtering."""
     group_cols = spec.get("group_by", [])
     
     # Map to actual column names
@@ -303,11 +245,7 @@ def _aggregate_service(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Li
 
 
 def _aggregate_financial(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
-    """
-    Calculate overall financial metrics.
-    
-    Returns sum, average, min, max for key financial fields.
-    """
+    """Calculate overall financial metrics."""
     metrics = {}
     
     # Get actual column names (case-insensitive)
@@ -348,11 +286,7 @@ def _aggregate_financial(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> 
 
 
 def _aggregate_time(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
-    """
-    Aggregate by time periods (month/quarter).
-    
-    Returns time series data and date range.
-    """
+    """Aggregate by time periods (month/quarter)."""
     group_cols = spec.get("group_by", [])
     
     # Map to actual column name
@@ -416,13 +350,17 @@ def _aggregate_time(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
     }
 
 
-def _aggregate_risk(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
+def _aggregate_risk_enhanced(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
     """
-    Aggregate risk indicators (disputes, verification issues, pending approvals).
+    Enhanced risk aggregation with separate disputed/accepted breakdowns.
     
-    Returns counts, amounts, and percentages for each risk category.
+    Returns detailed breakdowns for:
+    - Disputed invoices (by status, approval, payment, verification)
+    - Accepted invoices (by status, approval, payment, verification)
+    - Not verified issues
+    - Pending approvals
     """
-    filters = spec.get("filters", [])
+    sub_aggs = spec.get("sub_aggregations", [])
     
     # Get the actual GrandTotal column name
     grand_total_col = _get_column_name("grandtotal", column_mapping)
@@ -432,81 +370,70 @@ def _aggregate_risk(df: pd.DataFrame, spec: Dict, column_mapping: Dict) -> Dict:
     risk_summary = {}
     total_records = len(df)
     
-    # Process each risk filter
-    for filter_spec in filters:
-        risk_type = filter_spec.get("type")
-        field = filter_spec.get("field")
-        values = filter_spec.get("values", [])
+    # Process each sub-aggregation
+    for sub_agg in sub_aggs:
+        agg_name = sub_agg.get("name")
+        filter_field = sub_agg.get("filter_field")
+        filter_values = sub_agg.get("filter_values", [])
+        group_by = sub_agg.get("group_by", [])
         
-        # Map to actual column name
-        actual_field = _get_column_name(field, column_mapping)
+        # Map filter field to actual column name
+        actual_filter_field = _get_column_name(filter_field, column_mapping)
         
-        if not actual_field or actual_field not in df.columns:
+        if not actual_filter_field or actual_filter_field not in df.columns:
             continue
         
-        # Filter data for this risk type
-        risk_df = df[df[actual_field].isin(values)]
+        # Filter data
+        filtered_df = df[df[actual_filter_field].isin(filter_values)]
         
-        count = len(risk_df)
-        total_amount = float(risk_df[grand_total_col].sum()) if count > 0 else 0
-        percentage = round(count / total_records * 100, 1) if total_records > 0 else 0
-        
-        risk_summary[risk_type] = {
-            "count": count,
-            "total_amount": total_amount,
-            "percentage": percentage
-        }
-    
-    # Add overall risk score (percentage of invoices with any risk)
-    if risk_summary:
-        total_risk_count = sum(r["count"] for r in risk_summary.values())
-        risk_summary["overall_risk"] = {
-            "count": total_risk_count,
-            "percentage": round(total_risk_count / total_records * 100, 1) if total_records > 0 else 0
-        }
+        # If group_by exists, do detailed breakdown
+        if group_by:
+            # Map group_by columns to actual names
+            actual_group_cols = []
+            for col in group_by:
+                actual_col = _get_column_name(col, column_mapping)
+                if actual_col and actual_col in df.columns:
+                    actual_group_cols.append(actual_col)
+            
+            if actual_group_cols and len(filtered_df) > 0:
+                # Detailed breakdown
+                breakdown = filtered_df.groupby(actual_group_cols, dropna=False).agg(
+                    total_amount=(grand_total_col, 'sum'),
+                    invoice_count=(grand_total_col, 'count')
+                ).reset_index()
+                
+                breakdown = breakdown.fillna("Unknown")
+                
+                risk_summary[agg_name] = {
+                    "summary": {
+                        "total_count": len(filtered_df),
+                        "total_amount": float(filtered_df[grand_total_col].sum()),
+                        "percentage": round(len(filtered_df) / total_records * 100, 1) if total_records > 0 else 0
+                    },
+                    "breakdown": breakdown.to_dict('records')
+                }
+            else:
+                # No detailed breakdown possible
+                count = len(filtered_df)
+                total_amount = float(filtered_df[grand_total_col].sum()) if count > 0 else 0
+                
+                risk_summary[agg_name] = {
+                    "summary": {
+                        "total_count": count,
+                        "total_amount": total_amount,
+                        "percentage": round(count / total_records * 100, 1) if total_records > 0 else 0
+                    }
+                }
+        else:
+            # Simple count and amount (for not_verified, pending_approval)
+            count = len(filtered_df)
+            total_amount = float(filtered_df[grand_total_col].sum()) if count > 0 else 0
+            percentage = round(count / total_records * 100, 1) if total_records > 0 else 0
+            
+            risk_summary[agg_name] = {
+                "count": count,
+                "total_amount": total_amount,
+                "percentage": percentage
+            }
     
     return risk_summary
-
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def validate_aggregation_spec(spec: Dict[str, Any]) -> bool:
-    """
-    Validate that aggregation spec has correct structure.
-    
-    Args:
-        spec: Aggregation specification dict
-        
-    Returns:
-        True if valid, False otherwise
-    """
-    if not isinstance(spec, dict):
-        return False
-    
-    if "aggregations" not in spec:
-        return False
-    
-    if not isinstance(spec["aggregations"], list):
-        return False
-    
-    for agg in spec["aggregations"]:
-        if "category" not in agg:
-            return False
-    
-    return True
-
-
-def get_aggregation_summary_size(summary: Dict[str, Any]) -> int:
-    """
-    Calculate approximate size of aggregated summary in characters.
-    
-    Args:
-        summary: Aggregated summary dict
-        
-    Returns:
-        Approximate size in characters
-    """
-    import json
-    return len(json.dumps(summary))

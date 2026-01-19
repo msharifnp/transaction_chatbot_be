@@ -10,7 +10,7 @@ from src.config.field_constant import SYSTEM_INSTRUCTION_SVG, UI_COLUMNS
 from src.config.field_constant import FIELD_TYPES
 from src.ai.chart_spec_generator import SpecGenerator
 from src.aggregator.chart_aggregator import aggregate_rows
-from src.utils.utils import retry_with_backoff,choose_optimal_format,restore_original_columns
+from src.utils.utils import retry_with_backoff,choose_optimal_format,restore_original_columns,get_summary_spec
 from src.db.model_service import ModelService
 from src.ai.forecast_spec_generator import ForecastSpecGenerator
 from src.aggregator.forecast_aggregator import prepare_forecast_data,validate_and_fix_forecast_spec
@@ -68,89 +68,137 @@ class GeminiService:
             # Step 3: Build summary prompt
             prompt = f"""You are a senior business intelligence analyst preparing an executive summary report for management.
 
-    CONTEXT:
-    - Dataset: Invoice / Billing / Transaction Records
-    - Records Count: {num_records} rows
-    - Available Fields: {', '.join(sample_cols[:10])}{'...' if len(sample_cols) > 10 else ''}{date_info}
-    - Always be clear, structured, and professional.
-    - Follow the user's intent carefully.
+CONTEXT:
+- Dataset: Invoice / Billing / Transaction Records
+- Total Records:  invoices{date_info}
+- Data Type: Pre-aggregated summary with detailed status breakdowns
+- Always be clear, structured, and professional
 
-    USER REQUEST: "{user_query or 'Provide a comprehensive business summary and insights from this dataset.'}"
+USER REQUEST: "{user_query or 'Provide a comprehensive business summary and insights from this dataset.'}"
 
-    {data_block}
+{data_block}
 
-    ANALYSIS REQUIREMENTS:
+ANALYSIS REQUIREMENTS:
 
-    ABSOLUTE OUTPUT RULES:
+ABSOLUTE OUTPUT RULES:
+- DO NOT include any title, introduction, greeting, explanation, preface, or metadata
+  (e.g., no "Of course", no To/From/Date/Subject, no *** separators)
 
-    - DO NOT include any title, introduction, greeting, explanation, preface, or metadata
-    (e.g., no "Of course", no To/From/Date/Subject, no *** separators).
+Generate a professional business report aimed at finance and operations leaders with the following sections:
 
+## 1. Executive Summary (2–4 sentences)
+- Briefly describe the dataset scope using aggregations.time.date_range
+- Highlight the single most important business finding from the aggregated data
+- Reference key metrics from aggregations.financial (total_billed, total_invoices)
 
-    Generate a professional business report aimed at finance and operations leaders with the following sections:
+## 2. Status & Risk Overview
+**CRITICAL: Use the enhanced risk breakdown structure**
 
-    1. Executive Summary (2–4 sentences)
-    - Briefly describe the dataset scope and time period.
-    - Highlight the single most important business finding (e.g., high dispute rate, vendor concentration, cost center exposure).
+A) **Disputed Invoices Analysis**
+- Use aggregations.risk.disputed_breakdown
+- Show the summary: total_count, total_amount, percentage
+- Analyze the breakdown table showing:
+  - InvoiceStatusType (Disputed vs System Disputed)
+  - InvoiceApprovalStatus (what stage they're stuck at)
+  - PaymentStatus (payment readiness)
+  - VerificationResult (verification status)
+- Identify the most common combination causing issues
+- Quantify the value impact of disputes
 
-    2. Status & Risk Overview
-    (Use fields like invoice_status_type, invoice_approval_status, verification_result, payment_status, or similar if they exist.)
-    - Break down invoice counts and total value by status (Accepted/System Accepted vs Disputed/System Disputed vs Pending, etc.).
-    - Comment on approval and verification progress and what it implies for operational risk.
-    - Clearly quantify how much value is tied up in disputed/pending/problematic invoices.
+B) **Accepted Invoices Analysis**
+- Use aggregations.risk.accepted_breakdown
+- Show the summary: total_count, total_amount, percentage
+- Analyze the breakdown table showing:
+  - InvoiceStatusType (Accepted vs System Accepted)
+  - InvoiceApprovalStatus (approval progress)
+  - PaymentStatus (payment status)
+  - VerificationResult (verification completion)
+- Identify how many are fully processed (Verified + Approval Completed + Settled)
+- Note any accepted invoices with incomplete processing
 
-    3. Provider & Service Analysis
-    (Use providers_name, provider_name, service_name, line_name, connection_name, or similar.)
-    - Identify top providers by total spend and invoice count.
-    - Comment on vendor dependency (e.g., the share of total value for top 1–2 providers).
-    - Summarize the main service types being billed and any obvious duplication or unusual patterns.
+C) **Other Risk Indicators**
+- Use aggregations.risk.not_verified (if present)
+  - Count, total_amount, percentage of unverified invoices
+- Use aggregations.risk.pending_approval (if present)
+  - Count, total_amount, percentage of pending approvals
 
-    4. Cost Center & Location View
-    (Use fields like cost_code, cost_name, site_name, site_location_code, city, emirate, or similar.)
-    - List the top 3–5 cost centers or locations by total spend.
-    - State whether spending is concentrated in a few cost centers/locations or more evenly distributed.
-    - Highlight any locations or cost centers with high dispute levels or unusually high per-site spend.
+D) **Overall Risk Assessment**
+- Calculate total at-risk value (disputed + not verified + pending)
+- Comment on operational risk implications
+- Identify process bottlenecks from the detailed breakdowns
 
-    5. Financial Snapshot
-    (Use grand_total as the primary value, and net_total, total_tax, usage_charge, expected_amount if available.)
-    - **Total Billed Value**: Sum of grand_total.
-    - **Average Invoice Value**: Mean grand_total and typical range (min to max).
-    - If possible, comment on the relationship between net_total, taxes, and grand_total.
-    - Provide 1–2 sentences interpreting what this says about spending patterns.
+## 3. Provider & Service Analysis
+- Use aggregations.provider to identify top providers by total_amount
+- Calculate vendor dependency (top provider's share of aggregations.financial.total_billed)
+- If aggregations.service exists, summarize main service types
+- Comment on concentration vs. diversification
 
-    6. Operational & Process Insights
-    - Comment on processing efficiency: how many invoices are fully approved and verified versus pending or not verified.
-    - Identify recurring patterns by provider, location, or cost center in disputes or pending approvals.
-    - Mention any issues in fields like payment_status if present (e.g., always empty, inconsistent values).
+## 4. Cost Center & Location View
+- Use aggregations.cost_center to list top locations by total_amount
+- Calculate spending concentration (top 3 share of total)
+- Cross-reference with risk data if location-specific patterns exist
+- Note any concentration issues
 
-    7. Risk Factors & Red Flags
-    - Quantify the total value and proportion of invoices that are disputed, system-disputed, or otherwise problematic.
-    - Call out any high-value outliers (individual invoices or locations/providers with unusually large amounts).
-    - Note any data quality issues: missing values, inconsistent totals, unclear currencies, or suspicious patterns.
+## 5. Financial Snapshot
+Use aggregations.financial for all metrics:
+- **Total Billed Value**: total_billed
+- **Average Invoice Value**: average_invoice
+- **Invoice Range**: min_invoice to max_invoice
+- **Median Invoice**: median_invoice
+- **Total Tax**: total_tax (if available)
+- **Net Total**: total_net (if available)
+- **Total Usage**: total_usage (if available)
+- **Total Rental**: total_rental (if available)
+Interpret what these numbers mean for spending patterns
 
-    8. Key Recommendations (3–6 bullet points)
-    - Provide concrete, action-oriented recommendations.
-    - Include where to focus reviews (e.g., specific vendors, locations, cost centers, or statuses).
-    - Suggest opportunities for cost optimization, contract negotiation, or process improvements.
-    - Mention any data or system enhancements that would improve future analysis.
+## 6. Operational & Process Insights
+- Analyze aggregations.risk.accepted_breakdown and aggregations.risk.disputed_breakdown together
+- Calculate processing efficiency:
+  - % of invoices fully processed (Verified + Approval Completed)
+  - % stuck in approval workflow
+  - % with verification issues
+- Identify bottlenecks in approval/verification process from breakdown patterns
+- Note any patterns where specific status combinations are common
 
-    FORMATTING RULES:
-    - Use CSV headers (##) for sections exactly as above.
-    - Use **bold** for key metrics and numbers.
-    - Always include specific numbers and, where appropriate, percentages (e.g., "5 of 8 invoices (62.5%)").
-    - Do NOT invent a currency symbol; use the numeric value only (e.g., "57,372" not "$57,372") unless the currency is explicitly stated in the data.
-    - Keep each section concise (roughly 3–5 sentences or bullet points).
-    - Total length: roughly 400–600 words.
-    - Maintain a formal, professional business tone (no casual language).
+## 7. Risk Factors & Red Flags
+- Use aggregations.risk.disputed_breakdown.summary for total disputed exposure
+- Highlight most problematic status combinations from the breakdowns
+- Use aggregations.status to identify unusual patterns
+- Call out high-value outliers in aggregations.provider or aggregations.cost_center
+- Note data quality issues if evident
 
-    CRITICAL RULES:
-    - Base ALL statements strictly on the provided data.
-    - NEVER make assumptions or add information that cannot be inferred from the data.
-    - If data is insufficient for a section, include the sentence: "Insufficient data for [section name] analysis."
-    - Compare and contrast wherever possible instead of just listing numbers (e.g., "Location A accounts for 60% of spend versus 15% for Location B").
-    - The output should be a single, well-structured markdown report, not code.
+## 8. Key Recommendations (3–6 bullet points)
+- Provide concrete, action-oriented recommendations
+- Prioritize based on aggregations.risk data (focus on highest-value issues)
+- Reference specific status combinations that need attention
+- Suggest process improvements based on breakdown patterns
+- Include cost optimization opportunities from provider/cost_center data
+- Recommend data quality fixes if needed
+
+FORMATTING RULES:
+- Use markdown headers (##) for sections exactly as above
+- Use **bold** for key metrics and numbers
+- Always include specific numbers and percentages
+- Format large numbers with commas (e.g., "1,234,567")
+- Do NOT invent currency symbols; use numeric values only unless currency is explicit
+- Keep each section concise (3–5 sentences or bullet points)
+- Total length: roughly 500–700 words
+- Maintain formal, professional business tone
+
+CRITICAL RULES FOR RISK SECTION:
+- aggregations.risk.disputed_breakdown has TWO parts:
+  1. summary: {{"total_count": X, "total_amount": Y, "percentage": Z}}
+  2. breakdown: [{{"InvoiceStatusType": "...", "InvoiceApprovalStatus": "...", ...}}]
+- aggregations.risk.accepted_breakdown has the SAME structure
+- ALWAYS analyze BOTH the summary AND the breakdown table
+- Compare patterns between disputed and accepted invoices
+- Base ALL statements strictly on the aggregated data provided
+- NEVER make assumptions or add information not in the aggregations
+- If data is missing for a section, state: "Insufficient data for [section name] analysis."
+- Always compare and contrast (e.g., "Disputed: 25% vs Accepted: 75%")  
 
     Generate the comprehensive report now:"""
+
 
             # Step 4: Call model and return result
             print("[SUMMARY] Step 2: Generating summary report...")
@@ -913,7 +961,10 @@ class GeminiService:
                 "image_mime": None,
                 "error": f"⚠️ Chart generation error: {str(e)}"
             }
-
+            
+            
+            
+    
 
     def generate_summary(self, user_query: str, rows: List[Dict]) -> str:
         """Generate executive summary report using Gemini with intelligent aggregation."""
@@ -931,18 +982,23 @@ class GeminiService:
         try:
             # Step 1: Generate aggregation spec
             print("[SUMMARY] Step 1: Generating aggregation spec...")
-            spec_gen = SummarySpecGenerator(self.model_service)
-            available_columns = list(rows[0].keys())
-            sample_rows = rows[:3]
+            # spec_gen = SummarySpecGenerator(self.model_service)
+            # available_columns = list(rows[0].keys())
+            # sample_rows = rows[:3]
             
-            spec = spec_gen.generate_spec(
-                user_query=user_query,
-                available_columns=available_columns,
-                field_types=FIELD_TYPES,
-                sample_rows=sample_rows
-            )
+            # spec = spec_gen.get_default_spec(
+            #     user_query=user_query,
+            #     available_columns=available_columns,
+            #     field_types=FIELD_TYPES,
+            #     sample_rows=sample_rows
+            # )
             
-            print(f"[SUMMARY] ✅ Spec generated: {json.dumps(spec, indent=2)}")
+            
+            spec = get_summary_spec()
+            
+            print(f"[SUMMARY] ✅ Spec generated with {len(spec.get('aggregations', []))} categories")
+            print(f"[SUMMARY] Categories: {spec.get('include_categories', [])}")
+            print(f"Summary Data Spec : {spec}")
             
             
 
@@ -954,8 +1010,13 @@ class GeminiService:
                 field_types=FIELD_TYPES
             )
             
-            print(f"[SUMMARY] ✅ Aggregated to compact summary")
-            print(f"[SUMMARY] Total records: {aggregated_summary.get('total_records', 0)}")
+            if "error" in aggregated_summary and aggregated_summary.get("total_records", 0) == 0:
+                return f"⚠️ Aggregation error: {aggregated_summary['error']}"
+        
+            total_records = aggregated_summary.get("total_records", 0)
+            print(f"[SUMMARY] ✅ Aggregated {total_records} records")
+            print(f"[SUMMARY] Aggregation categories: {list(aggregated_summary.get('aggregations', {}).keys())}")
+            
 
             # Step 3: Format aggregated summary for model
             print("[SUMMARY] Step 3: Formatting aggregated data...")
@@ -983,92 +1044,134 @@ class GeminiService:
             # Step 5: Build summary prompt with aggregated data
             prompt = f"""You are a senior business intelligence analyst preparing an executive summary report for management.
 
-    CONTEXT:
-    - Dataset: Invoice / Billing / Transaction Records
-    - Total Records: {num_records} invoices{date_info}
-    - Data provided: Pre-aggregated summary with breakdowns by status, provider, cost center, and financial metrics
-    - Always be clear, structured, and professional
-    - Follow the user's intent carefully
+CONTEXT:
+- Dataset: Invoice / Billing / Transaction Records
+- Total Records: {total_records:,} invoices{date_info}
+- Data Type: Pre-aggregated summary with detailed status breakdowns
+- Always be clear, structured, and professional
 
-    USER REQUEST: "{user_query or 'Provide a comprehensive business summary and insights from this dataset.'}"
-    
-    ABSOLUTE OUTPUT RULES:
-    - Disputed and System Disputed are seprate status of invoices dont combine
-    - Accepted and System Accepted are seprate status of invoices dont combine
-    {data_block}
+USER REQUEST: "{user_query or 'Provide a comprehensive business summary and insights from this dataset.'}"
 
-    ANALYSIS REQUIREMENTS:
+{data_block}
 
-    ABSOLUTE OUTPUT RULES:
-    - DO NOT include any title, introduction, greeting, explanation, preface, or metadata
-    (e.g., no "Of course", no To/From/Date/Subject, no *** separators)
+ANALYSIS REQUIREMENTS:
 
-    Generate a professional business report aimed at finance and operations leaders with the following sections:
+ABSOLUTE OUTPUT RULES:
+- DO NOT include any title, introduction, greeting, explanation, preface, or metadata
+  (e.g., no "Of course", no To/From/Date/Subject, no *** separators)
 
-    ## 1. Executive Summary (2–4 sentences)
-    - Briefly describe the dataset scope and time period
-    - Highlight the single most important business finding (e.g., high dispute rate, vendor concentration, cost center exposure)
-    - Reference the aggregated data provided
+Generate a professional business report aimed at finance and operations leaders with the following sections:
 
-    ## 2. Status & Risk Overview
-    - Use the "status" aggregation to break down invoice counts and total values by status
-    - Use the "risk" aggregation to quantify disputed,system disputed not verified, and pending invoices
-    - Comment on approval and verification progress and operational risk implications
-    - Clearly quantify how much value is tied up in disputed/pending/problematic invoices
+## 1. Executive Summary (2–4 sentences)
+- Briefly describe the dataset scope using aggregations.time.date_range
+- Highlight the single most important business finding from the aggregated data
+- Reference key metrics from aggregations.financial (total_billed, total_invoices)
 
-    ## 3. Provider & Service Analysis
-    - Use the "provider" aggregation to identify top providers by spend and count
-    - Calculate and comment on vendor dependency (share of total value for top providers)
-    - If provider count is high, note concentration vs. diversification
+## 2. Status & Risk Overview
+**CRITICAL: Use the enhanced risk breakdown structure**
 
-    ## 4. Cost Center & Location View
-    - Use the "cost_center" aggregation to list top cost centers/locations by spend
-    - Comment on spending concentration vs. distribution
-    - Cross-reference with risk data if disputes are concentrated in specific locations
+A) **Disputed Invoices Analysis**
+- Use aggregations.risk.disputed_breakdown
+- Show the summary: total_count, total_amount, percentage
+- Analyze the breakdown table showing:
+  - InvoiceStatusType (Disputed vs System Disputed)
+  - InvoiceApprovalStatus (what stage they're stuck at)
+  - PaymentStatus (payment readiness)
+  - VerificationResult (verification status)
+- Identify the most common combination causing issues
+- Quantify the value impact of disputes
 
-    ## 5. Financial Snapshot
-    - Use the "financial" aggregation for:
-    - **Total Billed Value**: total_billed
-    - **Average Invoice Value**: average_invoice
-    - **Invoice Range**: min_invoice to max_invoice
-    - **Total Tax**: total_tax (if available)
-    - **Net Total**: total_net (if available)
-    - Provide 1–2 sentences interpreting spending patterns
+B) **Accepted Invoices Analysis**
+- Use aggregations.risk.accepted_breakdown
+- Show the summary: total_count, total_amount, percentage
+- Analyze the breakdown table showing:
+  - InvoiceStatusType (Accepted vs System Accepted)
+  - InvoiceApprovalStatus (approval progress)
+  - PaymentStatus (payment status)
+  - VerificationResult (verification completion)
+- Identify how many are fully processed (Verified + Approval Completed + Settled)
+- Note any accepted invoices with incomplete processing
 
-    ## 6. Operational & Process Insights
-    - Analyze status and risk aggregations to comment on processing efficiency
-    - Identify recurring patterns in disputes or pending approvals
-    - Note any gaps or inconsistencies in the aggregation data
+C) **Other Risk Indicators**
+- Use aggregations.risk.not_verified (if present)
+  - Count, total_amount, percentage of unverified invoices
+- Use aggregations.risk.pending_approval (if present)
+  - Count, total_amount, percentage of pending approvals
 
-    ## 7. Risk Factors & Red Flags
-    - Use "risk" aggregation to quantify:
-    - Disputed invoice count, amount, and percentage
-    - Not verified invoice count, amount, and percentage
-    - Pending approval count, amount, and percentage
-    - Call out any high-value outliers visible in the data
-    - Note any data quality issues inferred from the aggregations
+D) **Overall Risk Assessment**
+- Calculate total at-risk value (disputed + not verified + pending)
+- Comment on operational risk implications
+- Identify process bottlenecks from the detailed breakdowns
 
-    ## 8. Key Recommendations (3–6 bullet points)
-    - Provide concrete, action-oriented recommendations
-    - Include where to focus reviews (specific vendors, locations, cost centers, or statuses)
-    - Suggest opportunities for cost optimization, contract negotiation, or process improvements
-    - Mention any data or system enhancements needed
+## 3. Provider & Service Analysis
+- Use aggregations.provider to identify top providers by total_amount
+- Calculate vendor dependency (top provider's share of aggregations.financial.total_billed)
+- If aggregations.service exists, summarize main service types
+- Comment on concentration vs. diversification
 
-    FORMATTING RULES:
-    - Use markdown headers (##) for sections exactly as above
-    - Use **bold** for key metrics and numbers
-    - Always include specific numbers and percentages (e.g., "5 of 8 invoices (62.5%)")
-    - Do NOT invent currency symbols; use numeric values only (e.g., "57,372" not "$57,372") unless currency is explicit
-    - Keep each section concise (3–5 sentences or bullet points)
-    - Total length: roughly 400–600 words
-    - Maintain formal, professional business tone
+## 4. Cost Center & Location View
+- Use aggregations.cost_center to list top locations by total_amount
+- Calculate spending concentration (top 3 share of total)
+- Cross-reference with risk data if location-specific patterns exist
+- Note any concentration issues
 
-    CRITICAL RULES:
-    - Base ALL statements strictly on the aggregated data provided
-    - NEVER make assumptions or add information not inferrable from the data
-    - If aggregation data is missing for a section, state: "Insufficient data for [section name] analysis."
-    - Compare and contrast instead of just listing numbers
-    - The output should be a single, well-structured markdown report, not code
+## 5. Financial Snapshot
+Use aggregations.financial for all metrics:
+- **Total Billed Value**: total_billed
+- **Average Invoice Value**: average_invoice
+- **Invoice Range**: min_invoice to max_invoice
+- **Median Invoice**: median_invoice
+- **Total Tax**: total_tax (if available)
+- **Net Total**: total_net (if available)
+- **Total Usage**: total_usage (if available)
+- **Total Rental**: total_rental (if available)
+Interpret what these numbers mean for spending patterns
+
+## 6. Operational & Process Insights
+- Analyze aggregations.risk.accepted_breakdown and aggregations.risk.disputed_breakdown together
+- Calculate processing efficiency:
+  - % of invoices fully processed (Verified + Approval Completed)
+  - % stuck in approval workflow
+  - % with verification issues
+- Identify bottlenecks in approval/verification process from breakdown patterns
+- Note any patterns where specific status combinations are common
+
+## 7. Risk Factors & Red Flags
+- Use aggregations.risk.disputed_breakdown.summary for total disputed exposure
+- Highlight most problematic status combinations from the breakdowns
+- Use aggregations.status to identify unusual patterns
+- Call out high-value outliers in aggregations.provider or aggregations.cost_center
+- Note data quality issues if evident
+
+## 8. Key Recommendations (3–6 bullet points)
+- Provide concrete, action-oriented recommendations
+- Prioritize based on aggregations.risk data (focus on highest-value issues)
+- Reference specific status combinations that need attention
+- Suggest process improvements based on breakdown patterns
+- Include cost optimization opportunities from provider/cost_center data
+- Recommend data quality fixes if needed
+
+FORMATTING RULES:
+- Use markdown headers (##) for sections exactly as above
+- Use **bold** for key metrics and numbers
+- Always include specific numbers and percentages
+- Format large numbers with commas (e.g., "1,234,567")
+- Do NOT invent currency symbols; use numeric values only unless currency is explicit
+- Keep each section concise (3–5 sentences or bullet points)
+- Total length: roughly 500–700 words
+- Maintain formal, professional business tone
+
+CRITICAL RULES FOR RISK SECTION:
+- aggregations.risk.disputed_breakdown has TWO parts:
+  1. summary: {{"total_count": X, "total_amount": Y, "percentage": Z}}
+  2. breakdown: [{{"InvoiceStatusType": "...", "InvoiceApprovalStatus": "...", ...}}]
+- aggregations.risk.accepted_breakdown has the SAME structure
+- ALWAYS analyze BOTH the summary AND the breakdown table
+- Compare patterns between disputed and accepted invoices
+- Base ALL statements strictly on the aggregated data provided
+- NEVER make assumptions or add information not in the aggregations
+- If data is missing for a section, state: "Insufficient data for [section name] analysis."
+- Always compare and contrast (e.g., "Disputed: 25% vs Accepted: 75%")  
 
     Generate the comprehensive report now:"""
 

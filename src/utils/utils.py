@@ -513,3 +513,133 @@ def restore_original_columns(
 
     return restored
 
+
+def validate_aggregation_spec(spec: Dict[str, Any]) -> bool:
+    """Validate that aggregation spec has correct structure."""
+    if not isinstance(spec, dict):
+        return False
+    
+    if "aggregations" not in spec:
+        return False
+    
+    if not isinstance(spec["aggregations"], list):
+        return False
+    
+    for agg in spec["aggregations"]:
+        if "category" not in agg:
+            return False
+    
+    return True
+
+
+def get_aggregation_summary_size(summary: Dict[str, Any]) -> int:
+    """Calculate approximate size of aggregated summary in characters."""
+    import json
+    return len(json.dumps(summary))
+
+
+def get_summary_spec() -> Dict:
+        
+        return {
+            "aggregations": [
+                {
+                    "category": "status",
+                    "group_by": ["InvoiceStatusType", "InvoiceApprovalStatus", "VerificationResult", "PaymentStatus"],
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "provider",
+                    "group_by": ["ProviderName"],
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "cost_center",
+                    "group_by": ["CostName", "SiteName"],
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "service",
+                    "group_by": ["ServiceName"],
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "financial",
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "GrandTotal", "function": "avg"},
+                        {"field": "GrandTotal", "function": "min"},
+                        {"field": "GrandTotal", "function": "max"},
+                        {"field": "NetTotal", "function": "sum"},
+                        {"field": "TotalTax", "function": "sum"},
+                        {"field": "UsageCharge", "function": "sum"},
+                        {"field": "RentalCharge", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "time",
+                    "group_by": ["InvoiceDate"],
+                    "time_bucket": "month",
+                    "metrics": [
+                        {"field": "GrandTotal", "function": "sum"},
+                        {"field": "*", "function": "count"}
+                    ]
+                },
+                {
+                    "category": "risk",
+                    "sub_aggregations": [
+                        {
+                            "name": "disputed_breakdown",
+                            "description": "Detailed breakdown of disputed invoices",
+                            "filter_type": "disputed",
+                            "filter_field": "InvoiceStatusType",
+                            "filter_values": ["Disputed", "System Disputed"],
+                            "group_by": ["InvoiceStatusType", "InvoiceApprovalStatus", "PaymentStatus", "VerificationResult"],
+                            "metrics": [
+                                {"field": "GrandTotal", "function": "sum"},
+                                {"field": "*", "function": "count"}
+                            ]
+                        },
+                        {
+                            "name": "accepted_breakdown",
+                            "description": "Detailed breakdown of accepted invoices",
+                            "filter_type": "accepted",
+                            "filter_field": "InvoiceStatusType",
+                            "filter_values": ["Accepted", "System Accepted"],
+                            "group_by": ["InvoiceStatusType", "InvoiceApprovalStatus", "PaymentStatus", "VerificationResult"],
+                            "metrics": [
+                                {"field": "GrandTotal", "function": "sum"},
+                                {"field": "*", "function": "count"}
+                            ]
+                        },
+                        {
+                            "name": "not_verified",
+                            "description": "Invoices with verification issues",
+                            "filter_type": "not_verified",
+                            "filter_field": "VerificationResult",
+                            "filter_values": ["Not Verified", "Unknown"]
+                        },
+                        {
+                            "name": "pending_approval",
+                            "description": "Invoices pending approval",
+                            "filter_type": "pending_approval",
+                            "filter_field": "InvoiceApprovalStatus",
+                            "filter_values": ["Initiated", "Pending"]
+                        }
+                    ]
+                }
+            ],
+            "include_categories": ["status", "provider", "cost_center", "service", "financial", "time", "risk"]
+        }
