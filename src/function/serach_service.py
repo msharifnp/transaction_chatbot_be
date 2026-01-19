@@ -358,7 +358,7 @@ class SearchService:
             if not self.use_gemini:
                 return MessageResponseWrapper(
                     success=False,
-                    code=200,
+                    code=503,
                     message="Service temporarily unavailable",
                     errors=["AI_UNAVAILABLE"],
                     data={
@@ -423,7 +423,7 @@ class SearchService:
                 if result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
-                        code=200,
+                        code=503,
                         message="Database temporarily unavailable",
                         errors=[result["error_type"]],
                         data={
@@ -484,7 +484,7 @@ class SearchService:
 
                 return MessageResponseWrapper(
                     success=False,
-                    code=200,
+                    code=503,
                     message="Service temporarily unavailable",
                     data={
                         "response_type": "message",
@@ -531,7 +531,7 @@ class SearchService:
                 if result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
-                        code=200,
+                        code=503,
                         message="Database temporarily unavailable",
                         errors=[result["error_type"]],
                         data={
@@ -629,7 +629,7 @@ class SearchService:
                 if result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
-                        code=200,
+                        code=503,
                         message="AI processing failed",
                         errors=[result["error_type"]],
                         data={
@@ -707,7 +707,7 @@ class SearchService:
                 if result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
-                        code=200,
+                        code=503,
                         message="AI processing failed",
                         errors=[result["error_type"]],
                         data={
@@ -777,7 +777,7 @@ class SearchService:
                 if db_result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
-                        code=200,
+                        code=503,
                         message="Database temporarily unavailable",
                         errors=[db_result["error_type"]],
                         data={
