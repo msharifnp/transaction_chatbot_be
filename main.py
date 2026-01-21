@@ -5,6 +5,7 @@ from src.routers.search_router import router as search_router
 from src.routers.export_router import router as export_router
 from src.routers.comparison_router import router as comparison_router
 
+
 app = FastAPI(
     title="Invoice Search API",
     version="5.5.0",
@@ -23,6 +24,8 @@ app.add_middleware(
 app.include_router(search_router)
 app.include_router(export_router)
 app.include_router(comparison_router)
+
+
 
 if __name__ == "__main__":
     import uvicorn
