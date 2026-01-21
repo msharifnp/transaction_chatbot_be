@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any, Dict, Literal
+from datetime import datetime,date
 
 class UnifiedSearchRequest(BaseModel):
     """Unified search request - router decides mode automatically"""
@@ -105,6 +106,7 @@ class ExportWordRequest(ExportBaseRequest):
 
 class ExportPdfRequest(ExportBaseRequest):
     title: str=Field(default="Financial Report")
+    output_dir: Optional[str] = None
     
 class ExportExcelRequest(ExportBaseRequest):
     sheet_name: str=Field(default="Financial Data")
@@ -121,3 +123,24 @@ class HealthResponse(BaseModel):
     gemini_available: bool
     redis_connected: bool
     database_connected: bool
+    
+
+class ComparisonRequest(BaseModel):
+    TenantId: str 
+    SessionId: str
+    AccountNumber: str 
+    CurrentDate: date
+   
+class ComparisonResult(BaseModel):
+    response_type: Literal["comparison"] = "comparison"
+    tenant_id: str
+    session_id: str
+    account_number: str
+    file_path: str
+
+
+
+class ComparisonResponse(BaseResponse):
+    data: Optional[ComparisonResult] = None
+    
+    

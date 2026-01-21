@@ -1,7 +1,8 @@
 from io import BytesIO
+import os
 import re
 import json
-from typing import List
+from typing import List, Dict
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -579,3 +580,56 @@ class ExportService:
                 "Content-Disposition": f"attachment; filename=chart_{req.index}.png"
             }
         )
+        
+        
+   
+
+    def generate_pdf_to_disk(self, req: ExportPdfRequest) -> Dict[str, str]:
+        
+        # 1. Validate tenant/session
+        self.redis_service.validate_tenant_session(
+            req.TenantId,
+            req.SessionId
+        )
+
+        # 2. Fetch message from Redis
+        msg = self.redis_service.get_data_by_index(
+            TenantId=req.TenantId,
+            SessionId=req.SessionId,
+            index=req.index
+        )
+
+        if not msg or msg.get("role") != "assistant":
+            raise ValueError("Invalid or missing assistant content for PDF")
+
+        content = msg.get("content")
+        if not content:
+            raise ValueError("Empty content")
+
+        # 3. Generate PDF buffer (existing logic)
+        buffer = self.export_pdf(
+            content=content,
+            title=req.title
+        )
+
+        # 4. Resolve output directory safely
+        output_dir = getattr(
+            req,
+            "output_dir",
+            r"D:\Python_Project\exports\comparisons"  
+        )
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 5. Build file path
+        file_name = f"{req.SessionId}_{req.index}.pdf"
+        file_path = os.path.join(output_dir, file_name)
+
+        # 6. Write PDF to disk
+        with open(file_path, "wb") as f:
+            f.write(buffer.read())
+
+        return {
+            "success": True,
+            "file_path": file_path
+        }
