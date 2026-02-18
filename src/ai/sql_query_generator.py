@@ -283,6 +283,14 @@ NEVER choose "Voucher Date" (or any voucher-related date) unless the user explic
 asks for voucher date.
 Words like "invoice", "invoices", "receipt", or "receiving" do NOT mean voucher date.
 These are not explicit date-column instructions.
+
+ABSOLUTE DATE-COLUMN LOCK (MANDATORY):
+- If Priority 2 applies (time range given, no explicit date column),
+  you must use ONLY the table default date column everywhere.
+- Do NOT reference any other date column in SELECT, WHERE, GROUP BY, HAVING, ORDER BY, JOIN, CTE.
+- Example for XV_REC_HIS_VW with "last 24 months" and no explicit date column:
+  allowed date column: "Received Date" only
+  forbidden: "Voucher Date", "Promised Date", or any other date column.
 ==================================================================================
 
 
@@ -478,6 +486,9 @@ IMPORTANT REMINDERS:
 - SELECT column order MUST match the order columns appear in the table schema definition
 - Calculated/aliased columns (e.g. "Shortage Quantity") always go at the END of SELECT
 - The same question must always produce the same SQL — be deterministic
+- If user gives time range without explicit date-column name:
+  1) choose the table default date column
+  2) do not include any other date column in SELECT/ORDER/etc.
 
 USER QUESTION: {user_query}
 
@@ -502,7 +513,7 @@ Generate JSON now:
 """
 
         attempt = 0
-        max_attempts = 2
+        max_attempts = 3
         current_prompt = prompt
         result = None
         sql = ""
@@ -549,6 +560,9 @@ Generate JSON now:
                 f"- Required default date column: {date_policy.get('default_date_col')}\n"
                 "- Regenerate SQL using ONLY the required default date column because user did not explicitly "
                 "name a date column.\n"
+                "- Remove disallowed date columns from ALL clauses, including SELECT, WHERE, GROUP BY, "
+                "HAVING, ORDER BY, JOIN, and CTEs.\n"
+                "- Do NOT include any non-default date column for informational display.\n"
                 "- Keep tenant filter and all other constraints valid.\n"
                 "Return JSON only.\n"
             )
