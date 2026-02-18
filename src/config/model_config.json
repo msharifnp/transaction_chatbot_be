@@ -1,0 +1,24 @@
+[
+  {
+    "TenantId": "A10000",
+    "Purpose": "Summary",
+    "Provider": "Gemini",
+    "ModelName": "gemini-3-pro-preview",
+    "ApiKey": "AIzaSyAAU5m_pIdgKD6n3BY8UuxB1bcva0TYZ5M",
+    "Temperature": 0.7,
+    "TopP": 0.9,
+    "TopK": 40,
+    "MaxOutputTokens": 200000
+  },
+  {
+    "TenantId": "A10000",
+    "Purpose": "Technical",
+    "Provider": "Gemini",
+    "ModelName": "gemini-3-pro-preview",
+    "ApiKey": "AIzaSyAAU5m_pIdgKD6n3BY8UuxB1bcva0TYZ5M",
+    "Temperature": 0.7,
+    "TopP": 0.9,
+    "TopK": 40,
+    "MaxOutputTokens": 200000
+  }
+]

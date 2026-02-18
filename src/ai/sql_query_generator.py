@@ -1,335 +1,856 @@
+# import os
+# import json
+# import re
+# from datetime import datetime
+# from typing import Dict, Optional
+# from zoneinfo import ZoneInfo
+# from src.utils.utils import safe_json_from_model, get_zone, extract_month_and_year
+# from src.config.db_config import DatabaseConfig
+# from src.models.model_service import ModelService
+# from src.config.field_constant import TABLE_SCHEMAS
+
+# class SQLQueryGenerator:
+    
+#     PURPOSE = "Technical"
+       
+#     def __init__(self, model_service: ModelService):
+#         self.model_service = model_service
+#         self.enabled = model_service.has_purpose(self.PURPOSE)
+    
+#     def generate_sql(self, user_query: str, TenantId: str) -> Dict:
+
+#         if not TenantId or TenantId.strip() == "":
+#             raise ValueError("TenantId is required")
+
+#         schema_context = {
+#             "tables": TABLE_SCHEMAS
+#         }
+
+#         prompt = f"""You are an expert Oracle SQL query generator. Generate accurate Oracle SQL queries based on user questions using the provided table schemas.
+
+
+# AVAILABLE TABLES: 
+# {json.dumps(schema_context, separators=(',', ':'))}
+
+# ==================================================================================
+# STEP 0 — MANDATORY PRE-GENERATION CHECKLIST (complete IN ORDER before writing SQL):
+# ==================================================================================
+# Before writing a single line of SQL, mentally complete ALL steps below:
+
+# STEP 0-A  READ THE QUESTION CAREFULLY
+#   - Identify every entity the user mentions: item, vendor, location, date range,
+#     quantity type, value, status, etc.
+#   - Identify grouping intent: "by location", "by vendor", "by master location",
+#     "total", "each", "all", etc.
+#   - Identify filter intent: "below minimum", "last 6 months", "for item X", etc.
+#   - Do NOT assume columns or tables — derive them strictly from question keywords
+#     and the schema. Same question asked twice must always produce the same SQL.
+
+# STEP 0-B  MAP QUESTION TO TABLE(S)
+#   - Read every table's "description" in AVAILABLE TABLES.
+#   - Select ONLY the table(s) whose description clearly matches the question subject.
+#   - Do NOT use a table unless it is unambiguously relevant.
+
+# STEP 0-C  IDENTIFY REQUIRED COLUMNS (schema-grounded, no invention)
+#   - Open the matched table's "columns" object.
+#   - Pick ONLY the columns needed to answer the question.
+#   - Every column in the SELECT, WHERE, GROUP BY, ORDER BY MUST exist verbatim
+#     in the schema. Do NOT invent, abbreviate, or rename columns.
+#   - Map each question keyword deterministically to the same column every time:
+#       "quantity on hand"  → always "ITEM_DETAIL_ON_HAND_QUANTITY"
+#       "minimum stock"     → always "Minimum Stock"
+#       "master location"   → always "MASTER_LOCATION_NAME" / "Item ML On Hand Quantity"
+#       "location"          → always "ITEM_DETAIL_LOCATION" / "LOCATION_NAME"
+#       etc.
+
+# STEP 0-D  DETERMINE THE DATE COLUMN (strict hierarchy)
+#   Priority 1 — User explicitly names a date column (e.g. "voucher date",
+#                "delivery date", "accepted date") → use ONLY that column.
+#   Priority 2 — User mentions a time range but NO specific column
+#                → use the DEFAULT DATE COLUMN stated in that table's schema
+#                  "description" field. Never substitute another date column.
+#   Default date columns (do NOT override unless Priority 1 applies):
+#     - IVINSPECTIONHISTORY  : "Date Received"      (VARCHAR2 'YYYY-MM-DD')
+#     - XV_REC_HIS_VW        : "Received Date"       (DATE)
+#     - ITRN_HISTORY_VW      : "Transaction Date"    (DATE)
+#     - IVONHANDBYLOCATION   : "COST_AS_OF_DATE"     (VARCHAR2 'YYYY-MM-DD')
+
+# STEP 0-E  ORDER SELECTED COLUMNS TO MATCH SCHEMA ORDER (mandatory)
+#   - Note the order each column appears in the table's "columns" definition
+#     (top = first, bottom = last).
+#   - Your SELECT list MUST follow that exact same top-to-bottom order.
+#   - Example: schema order is [A, B, C, D, E, F], you need A, C, D, F
+#     → correct:   SELECT "A", "C", "D", "F"
+#     → incorrect: SELECT "C", "A", "F", "D"
+#   - Derived/calculated columns (e.g. "Shortage Quantity") go AFTER all real
+#     schema columns in the SELECT list.
+#   - This rule applies to every query — simple, aggregated, joined, CTE, ranked.
+
+# STEP 0-F  WRITE THE SQL
+#   - Only after completing steps A–E above, write the final SQL.
+#   - The SQL must be deterministic: the same question always produces the same query.
+#   - Include tenant filter, correct date handling, correct aggregation/grouping
+#     based solely on the question intent derived in Step 0-A.
+# ==================================================================================
+
+# CRITICAL TENANT FILTERING RULE:
+# ==================================================================================
+# EVERY query MUST include tenant filtering in the WHERE clause using one of these columns:
+# - If table has "CCN" column: WHERE "CCN" = '{TenantId}'
+# - If table has "Company" column: WHERE "Company" = '{TenantId}'
+# - If table has "Item Company" column: WHERE "Item Company" = '{TenantId}'
+# - If table has "Company Code" column: WHERE "Company Code" = '{TenantId}'
+
+# This applies to ALL queries: simple SELECT, aggregations, JOINs, subqueries, CTEs, and ranking queries.
+# ==================================================================================
+
+# CRITICAL COLUMN SELECTION RULE:
+# ==================================================================================
+# SELECT COLUMNS PRECISELY BASED ON USER QUESTION KEYWORDS:
+
+# INVENTORY ON-HAND QUANTITY COLUMNS (IVONHANDBYLOCATION):
+# - If user asks about "location" or "warehouse" or "site" level:
+#   → Use: "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+#   → This shows quantity at EACH specific location
+  
+# - If user asks about "master location" or "ML" level:
+#   → Use: "MASTER_LOCATION_NAME" or "ML", "Item ML On Hand Quantity"
+#   → This shows aggregated quantity at master location level
+  
+# - If user asks about "total" or "company-wide" or doesn't specify location:
+#   → Use: SUM("ITEM_DETAIL_ON_HAND_QUANTITY") GROUP BY "Item"
+#   → This shows total across all locations
+
+# - If user asks about "each location" or "all locations":
+#   → Use: "Item", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+#   → Show individual location details
+
+# STOCK LEVEL COMPARISON COLUMNS:
+# - "Minimum Stock" - Minimum stock level threshold
+# - "Maximum Stock" - Maximum stock level threshold
+# - "Reorder Point" - Reorder point threshold
+# - "Safety Stock" - Safety stock level
+
+# LOCATION COLUMNS:
+# - "ITEM_DETAIL_LOCATION" - Specific location/bin
+# - "LOCATION_NAME" - Location description
+# - "MASTER_LOCATION_NAME" - Master location name
+# - "ML" - Master location code
+
+# VALUE COLUMNS:
+# - "EXTENDED_AMOUNT" - Total inventory value at location
+# - "UNIT_COST" - Unit cost per item
+
+# DATE COLUMNS:
+# - "COST_AS_OF_DATE" - Cost calculation date (VARCHAR2 format 'YYYY-MM-DD')
+
+# COLUMN SELECTION EXAMPLES:
+
+# User asks: "items below minimum stock"
+# → Select: "Item", "ITEM_DESCRIPTION", "Minimum Stock", SUM("ITEM_DETAIL_ON_HAND_QUANTITY")
+# → Group by: "Item", "ITEM_DESCRIPTION", "Minimum Stock"
+# → Don't include location columns (user didn't ask for location breakdown)
+
+# User asks: "items below minimum stock by location"
+# → Select: "Item", "ITEM_DESCRIPTION", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY", "Minimum Stock"
+# → Don't group - show each location separately
+# → Include both location and quantity columns
+
+# User asks: "items below minimum at master location level"
+# → Select: "Item", "ITEM_DESCRIPTION", "MASTER_LOCATION_NAME", "Item ML On Hand Quantity", "Minimum Stock"
+# → Don't group - use ML-level columns directly
+
+# User asks: "total inventory value by location"
+# → Select: "ITEM_DETAIL_LOCATION", SUM("EXTENDED_AMOUNT")
+# → Group by: "ITEM_DETAIL_LOCATION"
+
+# User asks: "inventory on hand for item X"
+# → Select: "Item", "ITEM_DESCRIPTION", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+# → Don't aggregate - show all locations for that item
+# ==================================================================================
+
+# CRITICAL DEFAULT DATE COLUMN RULE:
+# ==================================================================================
+# When user mentions a time range WITHOUT specifying which date column to use, 
+# use the DEFAULT DATE COLUMN for that table:
+
+# - IVINSPECTIONHISTORY: Use "Date Received" (VARCHAR2)
+# - XV_REC_HIST: Use "REC_DATE" (DATE)
+# - XV_REC_HIS_VW: Use "Received Date" (DATE)
+# - ITRN_HISTORY_VW: Use "Transaction Date" (DATE)
+# - IVONHANDBYLOCATION: Use "COST_AS_OF_DATE" (VARCHAR2)
+
+# If user specifies a date column (e.g. "voucher date", "accepted date", "delivery date"),
+# use ONLY that specific column — do NOT fall back to the default.
+# If user does NOT specify a date column, ALWAYS use the default — do NOT use any other
+# date column even if it seems more intuitive.
+# ==================================================================================
+
+
+# ORACLE SQL GUIDELINES:
+# 1. Use double quotes for column names with spaces or special characters
+# 2. Use proper Oracle date functions: TO_DATE(), TO_CHAR(), SYSDATE, TRUNC()
+# 3. CRITICAL: In IVINSPECTIONHISTORY, date columns are stored as VARCHAR2 in 'YYYY-MM-DD' format
+# 4. For IVINSPECTIONHISTORY dates, use: TO_DATE("Date Column", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - [days]
+# 5. For other tables with real DATE columns: Use TRUNC("Date Column") >= TRUNC(SYSDATE) - [days]
+# 6. Use NVL() or COALESCE() for NULL handling
+# 7. DO NOT limit results with ROWNUM or FETCH FIRST unless user specifically asks for "top N" or "first N" or "limit N"
+# 8. Return ALL records that match the WHERE conditions by default
+# 9. Select ONLY columns relevant to the user's question
+# 10. String concatenation: Use || operator or CONCAT()
+# 11. Case-insensitive search: Use UPPER() or LOWER() functions
+# 12. Always alias tables when using JOINs
+# 13. Use proper Oracle aggregate functions: SUM(), COUNT(), AVG(), MAX(), MIN()
+# 14. For ranking: Use ROW_NUMBER(), RANK(), or DENSE_RANK() with OVER()
+# 15. If user asks last last months, or last year, or monthly , user doesnt specify date column, use default date column which mentioned in table schema description
+
+# QUERY EXAMPLES WITH PRECISE COLUMN SELECTION:
+
+# Example 1 - Items below minimum (NO location specified - aggregate):
+# Question: "What items have on-hand quantity less than minimum stock?"
+# SQL:
+# SELECT 
+#     "Item",
+#     "ITEM_DESCRIPTION",
+#     "Minimum Stock",
+#     SUM("ITEM_DETAIL_ON_HAND_QUANTITY") AS "Total On Hand Quantity"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# AND "Minimum Stock" > 0
+# GROUP BY "Item", "ITEM_DESCRIPTION", "Minimum Stock"
+# HAVING SUM("ITEM_DETAIL_ON_HAND_QUANTITY") < "Minimum Stock"
+# ORDER BY "Minimum Stock" - SUM("ITEM_DETAIL_ON_HAND_QUANTITY") DESC;
+
+# Example 2 - Items below minimum BY LOCATION (location specified):
+# Question: "What items have on-hand quantity less than minimum stock by location?"
+# SQL:
+# SELECT 
+#     "Item",
+#     "ITEM_DESCRIPTION",
+#     "ITEM_DETAIL_LOCATION",
+#     "LOCATION_NAME",
+#     "ITEM_DETAIL_ON_HAND_QUANTITY",
+#     "Minimum Stock",
+#     ("Minimum Stock" - "ITEM_DETAIL_ON_HAND_QUANTITY") AS "Shortage Quantity"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# AND "Minimum Stock" > 0
+# AND "ITEM_DETAIL_ON_HAND_QUANTITY" < "Minimum Stock"
+# ORDER BY "Shortage Quantity" DESC;
+
+# Example 3 - Items below minimum at MASTER LOCATION level:
+# Question: "What items have on-hand quantity less than minimum at master location level?"
+# SQL:
+# SELECT 
+#     "Item",
+#     "ITEM_DESCRIPTION",
+#     "MASTER_LOCATION_NAME",
+#     "Item ML On Hand Quantity",
+#     "Minimum Stock",
+#     ("Minimum Stock" - "Item ML On Hand Quantity") AS "Shortage Quantity"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# AND "Minimum Stock" > 0
+# AND "Item ML On Hand Quantity" < "Minimum Stock"
+# ORDER BY "Shortage Quantity" DESC;
+
+# Example 4 - Total inventory value by location:
+# Question: "What is the total inventory value by location?"
+# SQL:
+# SELECT 
+#     "ITEM_DETAIL_LOCATION",
+#     "LOCATION_NAME",
+#     SUM("EXTENDED_AMOUNT") AS "Total Inventory Value",
+#     COUNT(DISTINCT "Item") AS "Item Count"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# GROUP BY "ITEM_DETAIL_LOCATION", "LOCATION_NAME"
+# ORDER BY SUM("EXTENDED_AMOUNT") DESC;
+
+# Example 5 - Specific item inventory across all locations:
+# Question: "Show inventory on hand for item ABC-123"
+# SQL:
+# SELECT 
+#     "Item",
+#     "ITEM_DESCRIPTION",
+#     "ITEM_DETAIL_LOCATION",
+#     "LOCATION_NAME",
+#     "ITEM_DETAIL_ON_HAND_QUANTITY",
+#     "EXTENDED_AMOUNT",
+#     "Minimum Stock",
+#     "Maximum Stock"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# AND "Item" = 'ABC-123'
+# ORDER BY "ITEM_DETAIL_LOCATION";
+
+# Example 6 - Items above maximum stock (aggregate):
+# Question: "What items exceed maximum stock levels?"
+# SQL:
+# SELECT 
+#     "Item",
+#     "ITEM_DESCRIPTION",
+#     "Maximum Stock",
+#     SUM("ITEM_DETAIL_ON_HAND_QUANTITY") AS "Total On Hand Quantity",
+#     (SUM("ITEM_DETAIL_ON_HAND_QUANTITY") - "Maximum Stock") AS "Excess Quantity"
+# FROM IVONHANDBYLOCATION
+# WHERE "Item Company" = '{TenantId}'
+# AND "Maximum Stock" > 0
+# GROUP BY "Item", "ITEM_DESCRIPTION", "Maximum Stock"
+# HAVING SUM("ITEM_DETAIL_ON_HAND_QUANTITY") > "Maximum Stock"
+# ORDER BY "Excess Quantity" DESC;
+
+# Example 7 - Inspection rejections (no location - aggregate):
+# Question: "Show items with inspection rejections in last 6 months"
+# SQL:
+# SELECT 
+#     "Inspection Item",
+#     "ITEM_DESCRIPTION",
+#     SUM("Rejected Quantity") AS "Total Rejected Quantity",
+#     COUNT(*) AS "Rejection Count"
+# FROM IVINSPECTIONHISTORY
+# WHERE "Company" = '{TenantId}'
+# AND "Date Received" != ' '
+# AND LENGTH(TRIM("Date Received")) = 10
+# AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+# AND "Rejected Quantity" > 0
+# GROUP BY "Inspection Item", "ITEM_DESCRIPTION"
+# ORDER BY "Total Rejected Quantity" DESC;
+
+# Example 8 - Inspection rejections BY VENDOR (vendor specified):
+# Question: "Show items with inspection rejections by vendor in last 6 months"
+# SQL:
+# SELECT 
+#     "Vendor",
+#     "Inspection Item",
+#     "ITEM_DESCRIPTION",
+#     SUM("Rejected Quantity") AS "Total Rejected Quantity",
+#     COUNT(*) AS "Rejection Count"
+# FROM IVINSPECTIONHISTORY
+# WHERE "Company" = '{TenantId}'
+# AND "Date Received" != ' '
+# AND LENGTH(TRIM("Date Received")) = 10
+# AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+# AND "Rejected Quantity" > 0
+# GROUP BY "Vendor", "Inspection Item", "ITEM_DESCRIPTION"
+# ORDER BY "Vendor", "Total Rejected Quantity" DESC;
+
+# CRITICAL DATE HANDLING FOR IVINSPECTIONHISTORY:
+# ==================================================================================
+# The IVINSPECTIONHISTORY view stores ALL date columns as VARCHAR2 strings in 'YYYY-MM-DD' format.
+# IMPORTANT: NULL dates are stored as ' ' (single space), which will cause ORA-01841 errors if not filtered.
+
+# Date columns in IVINSPECTIONHISTORY (all VARCHAR2):
+# - "Date Received" (DEFAULT - use when user doesn't specify which date)
+# - "Inspected On"
+# - "Alpha Date Received"
+# - "Item Modification Date"
+# - "Setup Date"
+# - "Drawing Date"
+# - "ECN Date"
+# - "End of Life"
+# - "Obsoleted On"
+
+# ALWAYS filter out invalid dates BEFORE using TO_DATE():
+
+# Correct pattern (CRITICAL - use both filters):
+# ✓ WHERE "Date Received" != ' '
+# ✓ AND LENGTH(TRIM("Date Received")) = 10
+# ✓ AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+
+# Time ranges:
+# - Last 1 month: TRUNC(SYSDATE) - 30
+# - Last 3 months: TRUNC(SYSDATE) - 90
+# - Last 6 months: TRUNC(SYSDATE) - 180
+# - Last year: TRUNC(SYSDATE) - 365
+# ==================================================================================
+
+# IMPORTANT REMINDERS:
+# - ALWAYS include tenant filter
+# - Select columns PRECISELY based on user's question keywords
+# - If user says "by location" → include location columns, don't aggregate
+# - If user says "by master location" → use ML-level columns
+# - If user doesn't specify location → aggregate with GROUP BY Item
+# - If user says "total" or "company-wide" → use SUM() and GROUP BY
+# - For IVINSPECTIONHISTORY date filtering, ALWAYS add filters before TO_DATE()
+# - DO NOT add ROWNUM or FETCH FIRST limits unless user asks for "top N"
+# - Return ALL matching records by default
+# - Use table aliases for clarity in multi-table queries
+# - SELECT column order MUST match the order columns appear in the table schema definition
+# - Calculated/aliased columns (e.g. "Shortage Quantity") always go at the END of SELECT
+# - The same question must always produce the same SQL — be deterministic
+
+# USER QUESTION: {user_query}
+
+# CRITICAL OUTPUT FORMAT:
+# Return a single JSON object.
+
+# Structure:
+# {{
+#   "thought_process": "Briefly list the steps taken: 1. Identify tables, 2. Identify date column strategy, 3. List filters.",
+#   "sql": "THE_SQL_QUERY",
+#   "tables_used": ["TABLE_NAMES"]
+# }}
+
+# Rules:
+# 1. NO markdown code blocks (no ```json or ```)
+# 2. NO explanatory text before or after JSON
+# 3. Must be valid, parseable JSON
+# 4. "sql" field contains complete executable query
+# 5. Use \\n for line breaks in SQL string
+
+# Generate JSON now:
+# """
+
+#         response_text = self.model_service.generate(self.PURPOSE, prompt).strip()
+        
+#         print(f"[SQL GENERATOR] Raw response: {response_text[:500]}")
+        
+#         result = safe_json_from_model(response_text)
+#         print(f"[SQL GENERATOR] Parsed result: {result}")
+        
+#         if not result or not isinstance(result, dict):
+#             print(f"[SQL GENERATOR] ❌ Invalid response format: {result}")
+#             raise ValueError(f"Invalid response format from model: {type(result)}")
+        
+#         sql = result.get("sql", "").strip()
+        
+#         if not sql:
+#             print(f"[SQL GENERATOR] ❌ No SQL generated. Response: {result}")
+#             raise ValueError("No SQL query generated by model")
+        
+#         if TenantId not in sql:
+#             print(f"[SQL GENERATOR] ⚠️  TenantId '{TenantId}' not found in generated SQL")
+#             print(f"[SQL GENERATOR] SQL: {sql[:200]}")
+        
+#         print(f"[SQL GENERATOR] ✅ SQL generated successfully")
+#         return result
+
+
+
 import os
 import json
 import re
 from datetime import datetime
 from typing import Dict, Optional
 from zoneinfo import ZoneInfo
-from src.config.field_constant import FIELD_TYPES, FIELD_ALIASES, CANON_VALUES, MONTH_NAMES, DEFAULT_SELECT_FIELDS
 from src.utils.utils import safe_json_from_model, get_zone, extract_month_and_year
 from src.config.db_config import DatabaseConfig
-from src.db.model_service import ModelService
-
+from src.models.model_service import ModelService
+from src.config.field_constant import TABLE_SCHEMAS
 
 class SQLQueryGenerator:
+    
+    PURPOSE = "Technical"
        
-    def __init__(self, config: DatabaseConfig, model_service:ModelService ):
-        
-        self.table_name = config.full_table_name
+    def __init__(self, model_service: ModelService):
         self.model_service = model_service
-        self.enabled = model_service.is_available()
-        
+        self.enabled = model_service.has_purpose(self.PURPOSE)
+    
     def generate_sql(self, user_query: str, TenantId: str) -> Dict:
-       
-        # Validate TenantId is provided
+
         if not TenantId or TenantId.strip() == "":
-            raise ValueError("TenantId is required and cannot be empty")
-        
-        detected_month, detected_year = extract_month_and_year(user_query)
-        
-        # Build complete schema context with canonical values
+            raise ValueError("TenantId is required")
+
         schema_context = {
-            "table_name": self.table_name,
-            "field_types": FIELD_TYPES,
-            "field_aliases": FIELD_ALIASES,
-            "canonical_values": CANON_VALUES,
-            "default_select_fields": DEFAULT_SELECT_FIELDS
+            "tables": TABLE_SCHEMAS
         }
-        
-        # Date filter hint
-        now = datetime.now(get_zone())
-        date_hint = ""
-        explicit_filter = None
-        
-        if detected_month:
-            year = detected_year or now.year
-            month_name = list(MONTH_NAMES.keys())[detected_month - 1].title()
-            start_date = f"{year}-{detected_month:02d}-01"
-            end_date = f"{year}-{detected_month+1:02d}-01" if detected_month < 12 else f"{year+1}-01-01"
-            explicit_filter = f"InvoiceDate >= '{start_date}' AND InvoiceDate < '{end_date}'"
-            date_hint = f"\n⚠️ MONTH DETECTED: {month_name} {year}\n⚠️ USE THIS EXACT FILTER: {explicit_filter}"
 
-        tenant_hint = f"\n⚠️ TENANT CONTEXT: TenantId = '{TenantId}' (MANDATORY IN ALL QUERIES)"
-        
-        prompt = f"""You are a PostgreSQL query generator for a multi-tenant invoice database.
+        prompt = f"""You are an expert Oracle SQL query generator. Generate accurate Oracle SQL queries based on user questions using the provided table schemas.
 
-TASK: Convert user request to the appropriate SQL query.
 
-DATABASE SCHEMA:
-{json.dumps(schema_context, indent=2)}
+AVAILABLE TABLES: 
+{json.dumps(schema_context, separators=(',', ':'))}
 
-CURRENT CONTEXT:
-- Current date: {now.strftime("%Y-%m-%d")}{date_hint}{tenant_hint}
+==================================================================================
+STEP 0 — MANDATORY PRE-GENERATION CHECKLIST (complete IN ORDER before writing SQL):
+==================================================================================
+Before writing a single line of SQL, mentally complete ALL steps below:
 
-🔒 CRITICAL TENANT ISOLATION RULES (NON-NEGOTIABLE):
-1. "TenantId" = '{TenantId}' MUST be in EVERY query's WHERE clause
-2. For queries with existing WHERE: WHERE <conditions> AND "TenantId" = '{TenantId}'
-3. For queries without WHERE: WHERE "TenantId" = '{TenantId}'
-4. For CTEs/subqueries reading from {self.table_name}: Include TenantId filter
-5. NEVER generate SQL without TenantId filter
-6. NEVER use any TenantId from user input.
-7. The TenantId is ALWAYS provided - use it in every query
-8. InvoiceStatusType has values: 'Disputed', 'System Disputed', 'Accepted', 'System Accepted', etc.
-  * 'Disputed' ≠ 'System Disputed' (these are DIFFERENT values)
-  * 'Accepted' ≠ 'System Accepted' (these are DIFFERENT values)
-8. When user says "disputed and pending":
-  * If they mean BOTH conditions: WHERE InvoiceStatusType = 'Disputed' AND InvoiceApprovalStatus = 'Pending'
-  * If they mean EITHER condition: WHERE InvoiceStatusType = 'Disputed' OR InvoiceApprovalStatus = 'Pending'
-  * DEFAULT to BOTH (AND) unless user clearly means "or"
+STEP 0-A  READ THE QUESTION CAREFULLY
+  - Identify every entity the user mentions: item, vendor, location, date range,
+    quantity type, value, status, etc.
+  - Identify grouping intent: "by location", "by vendor", "by master location",
+    "total", "each", "all", etc.
+  - Identify filter intent: "below minimum", "last 6 months", "for item X", etc.
+  - Do NOT assume columns or tables — derive them strictly from question keywords
+    and the schema. Same question asked twice must always produce the same SQL.
+
+STEP 0-B  MAP QUESTION TO TABLE(S)
+  - Read every table's "description" in AVAILABLE TABLES.
+  - Select ONLY the table(s) whose description clearly matches the question subject.
+  - Do NOT use a table unless it is unambiguously relevant.
+
+STEP 0-C  IDENTIFY REQUIRED COLUMNS (schema-grounded, no invention)
+  - Open the matched table's "columns" object.
+  - Pick ONLY the columns needed to answer the question.
+  - Every column in the SELECT, WHERE, GROUP BY, ORDER BY MUST exist verbatim
+    in the schema. Do NOT invent, abbreviate, or rename columns.
+  - Map each question keyword deterministically to the same column every time:
+      "quantity on hand"  → always "ITEM_DETAIL_ON_HAND_QUANTITY"
+      "minimum stock"     → always "Minimum Stock"
+      "master location"   → always "MASTER_LOCATION_NAME" / "Item ML On Hand Quantity"
+      "location"          → always "ITEM_DETAIL_LOCATION" / "LOCATION_NAME"
+      etc.
+
+STEP 0-D  DETERMINE THE DATE COLUMN (strict hierarchy)
+  Priority 1 — User explicitly names a date column (e.g. "voucher date",
+               "delivery date", "accepted date") → use ONLY that column.
+  Priority 2 — User mentions a time range but NO specific column
+               → use the DEFAULT DATE COLUMN stated in that table's schema
+                 "description" field. Never substitute another date column.
+  Default date columns (do NOT override unless Priority 1 applies):
+    - IVINSPECTIONHISTORY  : "Date Received"      (VARCHAR2 'YYYY-MM-DD')
+    - XV_REC_HIS_VW        : "Received Date"       (DATE)
+    - ITRN_HISTORY_VW      : "Transaction Date"    (DATE)
+    - IVONHANDBYLOCATION   : "COST_AS_OF_DATE"     (VARCHAR2 'YYYY-MM-DD')
+
+STEP 0-E  ORDER SELECTED COLUMNS TO MATCH SCHEMA ORDER (mandatory)
+  - Note the order each column appears in the table's "columns" definition
+    (top = first, bottom = last).
+  - Your SELECT list MUST follow that exact same top-to-bottom order.
+  - Example: schema order is [A, B, C, D, E, F], you need A, C, D, F
+    → correct:   SELECT "A", "C", "D", "F"
+    → incorrect: SELECT "C", "A", "F", "D"
+  - Derived/calculated columns (e.g. "Shortage Quantity") go AFTER all real
+    schema columns in the SELECT list.
+  - This rule applies to every query — simple, aggregated, joined, CTE, ranked.
+
+STEP 0-F  WRITE THE SQL
+  - Only after completing steps A–E above, write the final SQL.
+  - The SQL must be deterministic: the same question always produces the same query.
+  - Include tenant filter, correct date handling, correct aggregation/grouping
+    based solely on the question intent derived in Step 0-A.
+==================================================================================
+
+CRITICAL TENANT FILTERING RULE:
+==================================================================================
+EVERY query MUST include tenant filtering in the WHERE clause using one of these columns:
+- If table has "CCN" column: WHERE "CCN" = '{TenantId}'
+- If table has "Company" column: WHERE "Company" = '{TenantId}'
+- If table has "Item Company" column: WHERE "Item Company" = '{TenantId}'
+- If table has "Company Code" column: WHERE "Company Code" = '{TenantId}'
+
+This applies to ALL queries: simple SELECT, aggregations, JOINs, subqueries, CTEs, and ranking queries.
+==================================================================================
+
+CRITICAL COLUMN SELECTION RULE:
+==================================================================================
+SELECT COLUMNS PRECISELY BASED ON USER QUESTION KEYWORDS:
+
+INVENTORY ON-HAND QUANTITY COLUMNS (IVONHANDBYLOCATION):
+- If user asks about "location" or "warehouse" or "site" level:
+  → Use: "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+  → This shows quantity at EACH specific location
   
-9. When user says "disputed invoices", check context:
-  * "disputed" alone → InvoiceStatusType = 'Disputed'
-  * "system disputed" → InvoiceStatusType = 'System Disputed'
-  * "all disputed" → InvoiceStatusType IN ('Disputed', 'System Disputed')
+- If user asks about "master location" or "ML" level:
+  → Use: "MASTER_LOCATION_NAME" or "ML", "Item ML On Hand Quantity"
+  → This shows aggregated quantity at master location level
+  
+- If user asks about "total" or "company-wide" or doesn't specify location:
+  → Use: SUM("ITEM_DETAIL_ON_HAND_QUANTITY") GROUP BY "Item"
+  → This shows total across all locations
 
-QUERY GENERATION RULES:
+- If user asks about "each location" or "all locations":
+  → Use: "Item", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+  → Show individual location details
 
-1. CHOOSE THE RIGHT QUERY TYPE based on user request:
+STOCK LEVEL COMPARISON COLUMNS:
+- "Minimum Stock" - Minimum stock level threshold
+- "Maximum Stock" - Maximum stock level threshold
+- "Reorder Point" - Reorder point threshold
+- "Safety Stock" - Safety stock level
 
-   A. SIMPLE SELECT (user wants to see invoices/records):
-      - "show invoices", "list invoices", "find invoices", "get invoices"
-      - Use DEFAULT_SELECT_FIELDS when selecting full records
-      - SELECT {', '.join(DEFAULT_SELECT_FIELDS)} FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND <filters>
-      
-   B. AGGREGATION (user wants totals, counts, sums, averages):
-      - "total amount", "sum of GrandTotal", "count invoices", "average tax"
-      - SELECT <dimension>, <aggregate> FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND <filters> GROUP BY <dimension>
-      - Examples:
-        * "sum of GrandTotal by site" → SELECT SiteName, SUM(GrandTotal) FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY SiteName
-        * "count invoices per provider" → SELECT ProviderName, COUNT(*) FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY ProviderName
-        * "average tax by status" → SELECT InvoiceStatusType, AVG(TotalTax) FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY InvoiceStatusType
-      
-   C. DISTINCT VALUES (user wants unique list):
-      - "what sites", "list all providers", "which locations", "distinct statuses"
-      - SELECT DISTINCT <column> FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND <filters>
-      - Example: "what sites are there" → SELECT DISTINCT SiteName FROM {self.table_name} WHERE "TenantId" = '{TenantId}'
-      
-   D. SUPERLATIVES - MOST/LEAST/HIGHEST/LOWEST (user wants extreme values with ties):
-      - "most expensive", "highest invoice", "lowest GrandTotal", "least tax"
-      - ALWAYS use DENSE_RANK with rk = 1 to handle ties
-      - Use DEFAULT_SELECT_FIELDS in subquery
-      
-      WITH ranked AS (
-          SELECT {', '.join(DEFAULT_SELECT_FIELDS)},
-                 DENSE_RANK() OVER (ORDER BY <measure> DESC) AS rk
-          FROM {self.table_name}
-          WHERE "TenantId" = '{TenantId}' AND <filters>
-      )
-      SELECT * FROM ranked WHERE rk = 1
-      
-   E. TOP/BOTTOM N (user wants ranked results with specific number):
-      - "top 5", "highest 3", "bottom 10", "first 2"
-      - Use DENSE_RANK with rk <= N to handle ties
-      - Use DEFAULT_SELECT_FIELDS in subquery
-      
-      WITH ranked AS (
-          SELECT {', '.join(DEFAULT_SELECT_FIELDS)},
-                 DENSE_RANK() OVER (ORDER BY <measure> DESC) AS rk
-          FROM {self.table_name}
-          WHERE "TenantId" = '{TenantId}' AND <filters>
-      )
-      SELECT * FROM ranked WHERE rk <= <N>
-      
-   F. TOP N PER DIMENSION (user wants ranked results per group):
-      - "top 5 invoices for each site", "highest invoice per provider"
-      - Use DEFAULT_SELECT_FIELDS in subquery
-      
-      WITH ranked AS (
-          SELECT {', '.join(DEFAULT_SELECT_FIELDS)},
-                 DENSE_RANK() OVER (PARTITION BY <dimension> ORDER BY <measure> DESC) AS rk
-          FROM {self.table_name}
-          WHERE "TenantId" = '{TenantId}' AND <filters>
-      )
-      SELECT * FROM ranked WHERE rk <= <N>
-      
-   G. NTH HIGHEST/LOWEST (user wants 2nd highest, 3rd lowest, etc.):
-      - "2nd highest GrandTotal", "3rd lowest per site"
-      - Use DEFAULT_SELECT_FIELDS in subquery
-      
-      WITH ranked AS (
-          SELECT {', '.join(DEFAULT_SELECT_FIELDS)},
-                 DENSE_RANK() OVER (ORDER BY <measure> DESC) AS rk
-          FROM {self.table_name}
-          WHERE "TenantId" = '{TenantId}' AND <filters>
-      )
-      SELECT * FROM ranked WHERE rk = <N>
-      
+LOCATION COLUMNS:
+- "ITEM_DETAIL_LOCATION" - Specific location/bin
+- "LOCATION_NAME" - Location description
+- "MASTER_LOCATION_NAME" - Master location name
+- "ML" - Master location code
 
-2. POSTGRESQL-SPECIFIC SYNTAX:
-   - Use EXTRACT(YEAR FROM date_column) instead of YEAR(date_column)
-   - Use EXTRACT(MONTH FROM date_column) instead of MONTH(date_column)
-   - Use LIMIT instead of TOP
-   - Use :: for type casting (column::DATE)
-   - Window functions: DENSE_RANK() OVER (ORDER BY col DESC)
-   - String comparisons are case-sensitive
-   - Use single quotes for strings ('value')
+VALUE COLUMNS:
+- "EXTENDED_AMOUNT" - Total inventory value at location
+- "UNIT_COST" - Unit cost per item
 
-3. FIELD VALUE MATCHING:
-   - 🔍 ALWAYS check user's words against "canonical_values" in schema
-   - ✅ Match user input to CLOSEST canonical value (e.g., "dubi" → "Dubai", "etisalt" → "Etisalat")
-   - ✅ Use EXACT canonical values in WHERE clauses (SiteName = 'Dubai')
-   - 🚫 NEVER use LIKE with wildcards (LIKE '%dubi%')
-   - 🧠 Use context to disambiguate:
-     * "dubai site" → SiteName = 'Dubai' (NOT ProviderName)
-     * "du provider" → ProviderName = 'Du' (NOT SiteName)
-     * "show provider invoices in dubai" → WHERE "TenantId" = '{TenantId}' AND SiteName = 'Dubai'
-     * "show du invoices" → WHERE "TenantId" = '{TenantId}' AND ProviderName = 'Du'
+DATE COLUMNS:
+- "COST_AS_OF_DATE" - Cost calculation date (VARCHAR2 format 'YYYY-MM-DD')
 
-4. FIELD MAPPING (use these canonical field names):
-   - "grand total", "total", "amount" → GrandTotal
-   - "rental", "rental charge" → RentalCharge
-   - "tax", "total tax" → TotalTax
-   - "provider", "vendor" → ProviderName
-   - "site", "site name", "location" → SiteName
-   - "date", "invoice date" → invoice_date
-   - "status", "invoice status" → InvoiceStatusType
-   - "account", "account number" → AccountNumber
-   - "cost center", "cost code" → CostCode
+COLUMN SELECTION EXAMPLES:
 
-5. COLUMN SELECTION RULES:
-   - For simple SELECT queries: Use DEFAULT_SELECT_FIELDS
-     Example: SELECT {', '.join(DEFAULT_SELECT_FIELDS)} FROM {self.table_name} WHERE "TenantId" = '{TenantId}'
-   
-   - For window function queries (TOP N, superlatives, NTH): Use DEFAULT_SELECT_FIELDS in CTE
-     Example: WITH ranked AS (SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK()... WHERE "TenantId" = '{TenantId}')
-   
-   - For aggregations: SELECT <grouping_columns>, <aggregate_functions>
-     Example: SELECT SiteName, SUM(GrandTotal) WHERE "TenantId" = '{TenantId}'...
-   
-   - For DISTINCT: SELECT DISTINCT <column>
-     Example: SELECT DISTINCT SiteName FROM {self.table_name} WHERE "TenantId" = '{TenantId}'
+User asks: "items below minimum stock"
+→ Select: "Item", "ITEM_DESCRIPTION", "Minimum Stock", SUM("ITEM_DETAIL_ON_HAND_QUANTITY")
+→ Group by: "Item", "ITEM_DESCRIPTION", "Minimum Stock"
+→ Don't include location columns (user didn't ask for location breakdown)
 
-6. CRITICAL RULES FOR SUPERLATIVES:
-   - "most expensive", "highest", "maximum" → Use DENSE_RANK with rk = 1 (NOT ORDER BY with LIMIT 1)
-   - "least expensive", "lowest", "minimum" → Use DENSE_RANK with rk = 1
-   - This handles ties correctly (multiple invoices with same max/min value)
-   
-   ❌ WRONG: SELECT * FROM {self.table_name} ORDER BY GrandTotal DESC LIMIT 1
-   ✅ CORRECT: WITH ranked AS (SELECT ..., DENSE_RANK() OVER (ORDER BY GrandTotal DESC) AS rk FROM {self.table_name} WHERE "TenantId" = '{TenantId}') SELECT * FROM ranked WHERE rk = 1
+User asks: "items below minimum stock by location"
+→ Select: "Item", "ITEM_DESCRIPTION", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY", "Minimum Stock"
+→ Don't group - show each location separately
+→ Include both location and quantity columns
 
-QUERY EXAMPLES (ALL WITH MANDATORY TENANT FILTER):
+User asks: "items below minimum at master location level"
+→ Select: "Item", "ITEM_DESCRIPTION", "MASTER_LOCATION_NAME", "Item ML On Hand Quantity", "Minimum Stock"
+→ Don't group - use ML-level columns directly
 
-User: "show all invoices"
-SQL: SELECT {', '.join(DEFAULT_SELECT_FIELDS)} FROM {self.table_name} WHERE "TenantId" = '{TenantId}'
+User asks: "total inventory value by location"
+→ Select: "ITEM_DETAIL_LOCATION", SUM("EXTENDED_AMOUNT")
+→ Group by: "ITEM_DETAIL_LOCATION"
 
-User: "invoices from Dubai"
-SQL: SELECT {', '.join(DEFAULT_SELECT_FIELDS)} FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND SiteName = 'Dubai'
+User asks: "inventory on hand for item X"
+→ Select: "Item", "ITEM_DESCRIPTION", "ITEM_DETAIL_LOCATION", "ITEM_DETAIL_ON_HAND_QUANTITY"
+→ Don't aggregate - show all locations for that item
+==================================================================================
 
-User: "most expensive invoice" OR "highest GrandTotal" OR "find the most expensive"
-SQL: WITH ranked AS (
-    SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK() OVER (ORDER BY GrandTotal DESC) AS rk
-    FROM {self.table_name}
-    WHERE "TenantId" = '{TenantId}'
-)
-SELECT * FROM ranked WHERE rk = 1
+CRITICAL DEFAULT DATE COLUMN RULE:
+==================================================================================
+When user mentions a time range WITHOUT specifying which date column to use, 
+use the DEFAULT DATE COLUMN for that table:
 
-User: "sum of grand total by site"
-SQL: SELECT SiteName, SUM(GrandTotal) AS total_amount FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY SiteName
+- IVINSPECTIONHISTORY: Use "Date Received" (VARCHAR2)
+- XV_REC_HIS_VW: Use "Received Date" (DATE)
+- ITRN_HISTORY_VW: Use "Transaction Date" (DATE)
+- IVONHANDBYLOCATION: Use "COST_AS_OF_DATE" (VARCHAR2)
 
-User: "count invoices per provider"
-SQL: SELECT ProviderName, COUNT(*) AS invoice_count FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY ProviderName
+If user specifies a date column (e.g. "voucher date", "accepted date", "delivery date"),
+use ONLY that specific column — do NOT fall back to the default.
+If user does NOT specify a date column, ALWAYS use the default — do NOT use any other
+date column even if it seems more intuitive.
+==================================================================================
 
-User: "what sites are there"
-SQL: SELECT DISTINCT SiteName FROM {self.table_name} WHERE "TenantId" = '{TenantId}'
 
-User: "top 5 invoices by grand total"
-SQL: WITH ranked AS (
-    SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK() OVER (ORDER BY GrandTotal DESC) AS rk
-    FROM {self.table_name}
-    WHERE "TenantId" = '{TenantId}'
-)
-SELECT * FROM ranked WHERE rk <= 5
+ORACLE SQL GUIDELINES:
+1. Use double quotes for column names with spaces or special characters
+2. Use proper Oracle date functions: TO_DATE(), TO_CHAR(), SYSDATE, TRUNC()
+3. CRITICAL: In IVINSPECTIONHISTORY, date columns are stored as VARCHAR2 in 'YYYY-MM-DD' format
+4. For IVINSPECTIONHISTORY dates, use: TO_DATE("Date Column", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - [days]
+5. For other tables with real DATE columns: Use TRUNC("Date Column") >= TRUNC(SYSDATE) - [days]
+6. Use NVL() or COALESCE() for NULL handling
+7. DO NOT limit results with ROWNUM or FETCH FIRST unless user specifically asks for "top N" or "first N" or "limit N"
+8. Return ALL records that match the WHERE conditions by default
+9. Select ONLY columns relevant to the user's question
+10. String concatenation: Use || operator or CONCAT()
+11. Case-insensitive search: Use UPPER() or LOWER() functions
+12. Always alias tables when using JOINs
+13. Use proper Oracle aggregate functions: SUM(), COUNT(), AVG(), MAX(), MIN()
+14. For ranking: Use ROW_NUMBER(), RANK(), or DENSE_RANK() with OVER()
+15. If user asks last last months, or last year, or monthly , user doesnt specify date column, use default date column which mentioned in table schema description
 
-User: "highest invoice per site"
-SQL: WITH ranked AS (
-    SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK() OVER (PARTITION BY SiteName ORDER BY GrandTotal DESC) AS rk
-    FROM {self.table_name}
-    WHERE "TenantId" = '{TenantId}'
-)
-SELECT * FROM ranked WHERE rk = 1
+QUERY EXAMPLES WITH PRECISE COLUMN SELECTION:
 
-User: "2nd highest grand total"
-SQL: WITH ranked AS (
-    SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK() OVER (ORDER BY GrandTotal DESC) AS rk
-    FROM {self.table_name}
-    WHERE "TenantId" = '{TenantId}'
-)
-SELECT * FROM ranked WHERE rk = 2
+Example 1 - Items below minimum (NO location specified - aggregate):
+Question: "What items have on-hand quantity less than minimum stock?"
+SQL:
+SELECT 
+    "Item",
+    "ITEM_DESCRIPTION",
+    "Minimum Stock",
+    SUM("ITEM_DETAIL_ON_HAND_QUANTITY") AS "Total On Hand Quantity"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+AND "Minimum Stock" > 0
+GROUP BY "Item", "ITEM_DESCRIPTION", "Minimum Stock"
+HAVING SUM("ITEM_DETAIL_ON_HAND_QUANTITY") < "Minimum Stock"
+ORDER BY "Minimum Stock" - SUM("ITEM_DETAIL_ON_HAND_QUANTITY") DESC;
 
-User: "average tax by status"
-SQL: SELECT InvoiceStatusType, AVG(TotalTax) AS avg_tax FROM {self.table_name} WHERE "TenantId" = '{TenantId}' GROUP BY InvoiceStatusType
+Example 2 - Items below minimum BY LOCATION (location specified):
+Question: "What items have on-hand quantity less than minimum stock by location?"
+SQL:
+SELECT 
+    "Item",
+    "ITEM_DESCRIPTION",
+    "ITEM_DETAIL_LOCATION",
+    "LOCATION_NAME",
+    "ITEM_DETAIL_ON_HAND_QUANTITY",
+    "Minimum Stock",
+    ("Minimum Stock" - "ITEM_DETAIL_ON_HAND_QUANTITY") AS "Shortage Quantity"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+AND "Minimum Stock" > 0
+AND "ITEM_DETAIL_ON_HAND_QUANTITY" < "Minimum Stock"
+ORDER BY "Shortage Quantity" DESC;
 
-User: "disputed invoices in August 2024"
-SQL: SELECT {', '.join(DEFAULT_SELECT_FIELDS)} FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND InvoiceStatusType = 'Disputed' AND invoice_date >= '2024-08-01' AND invoice_date < '2024-09-01'
+Example 3 - Items below minimum at MASTER LOCATION level:
+Question: "What items have on-hand quantity less than minimum at master location level?"
+SQL:
+SELECT 
+    "Item",
+    "ITEM_DESCRIPTION",
+    "MASTER_LOCATION_NAME",
+    "Item ML On Hand Quantity",
+    "Minimum Stock",
+    ("Minimum Stock" - "Item ML On Hand Quantity") AS "Shortage Quantity"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+AND "Minimum Stock" > 0
+AND "Item ML On Hand Quantity" < "Minimum Stock"
+ORDER BY "Shortage Quantity" DESC;
 
-User: "top 3 invoices per provider"
-SQL: WITH ranked AS (
-    SELECT {', '.join(DEFAULT_SELECT_FIELDS)}, DENSE_RANK() OVER (PARTITION BY ProviderName ORDER BY GrandTotal DESC) AS rk
-    FROM {self.table_name}
-    WHERE "TenantId" = '{TenantId}'
-)
-SELECT * FROM ranked WHERE rk <= 3
+Example 4 - Total inventory value by location:
+Question: "What is the total inventory value by location?"
+SQL:
+SELECT 
+    "ITEM_DETAIL_LOCATION",
+    "LOCATION_NAME",
+    SUM("EXTENDED_AMOUNT") AS "Total Inventory Value",
+    COUNT(DISTINCT "Item") AS "Item Count"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+GROUP BY "ITEM_DETAIL_LOCATION", "LOCATION_NAME"
+ORDER BY SUM("EXTENDED_AMOUNT") DESC;
 
-FILTERING RULES:
-✅ CORRECT: WHERE "TenantId" = '{TenantId}' AND SiteName = 'Dubai'
-✅ CORRECT: WHERE "TenantId" = '{TenantId}' AND ProviderName = 'Etisalat'
-✅ CORRECT: WHERE "TenantId" = '{TenantId}' AND InvoiceStatusType = 'Disputed'
-✅ CORRECT: WHERE "TenantId" = '{TenantId}' AND SiteName IN ('Dubai', 'Abu Dhabi')
-❌ WRONG: WHERE SiteName = 'Dubai' (missing TenantId)
-❌ WRONG: WHERE SiteName LIKE '%dubi%'
-❌ WRONG: WHERE ProviderName LIKE '%etis%'
+Example 5 - Specific item inventory across all locations:
+Question: "Show inventory on hand for item ABC-123"
+SQL:
+SELECT 
+    "Item",
+    "ITEM_DESCRIPTION",
+    "ITEM_DETAIL_LOCATION",
+    "LOCATION_NAME",
+    "ITEM_DETAIL_ON_HAND_QUANTITY",
+    "EXTENDED_AMOUNT",
+    "Minimum Stock",
+    "Maximum Stock"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+AND "Item" = 'ABC-123'
+ORDER BY "ITEM_DETAIL_LOCATION";
 
-DATE HANDLING:
-{f"- Month filter: {explicit_filter}" if explicit_filter else "- Use YYYY-MM-DD format"}
-- String values: single quotes ('Dubai')
-- Numeric values: no quotes (5000)
-- Dates: single quotes ('2024-08-01')
-- TenantId: single quotes ('{TenantId}')
+Example 6 - Items above maximum stock (aggregate):
+Question: "What items exceed maximum stock levels?"
+SQL:
+SELECT 
+    "Item",
+    "ITEM_DESCRIPTION",
+    "Maximum Stock",
+    SUM("ITEM_DETAIL_ON_HAND_QUANTITY") AS "Total On Hand Quantity",
+    (SUM("ITEM_DETAIL_ON_HAND_QUANTITY") - "Maximum Stock") AS "Excess Quantity"
+FROM IVONHANDBYLOCATION
+WHERE "Item Company" = '{TenantId}'
+AND "Maximum Stock" > 0
+GROUP BY "Item", "ITEM_DESCRIPTION", "Maximum Stock"
+HAVING SUM("ITEM_DETAIL_ON_HAND_QUANTITY") > "Maximum Stock"
+ORDER BY "Excess Quantity" DESC;
 
-OUTPUT FORMAT - Return ONLY this JSON:
+Example 7 - Inspection rejections (no location - aggregate):
+Question: "Show items with inspection rejections in last 6 months"
+SQL:
+SELECT 
+    "Inspection Item",
+    "ITEM_DESCRIPTION",
+    SUM("Rejected Quantity") AS "Total Rejected Quantity",
+    COUNT(*) AS "Rejection Count"
+FROM IVINSPECTIONHISTORY
+WHERE "Company" = '{TenantId}'
+AND "Date Received" != ' '
+AND LENGTH(TRIM("Date Received")) = 10
+AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+AND "Rejected Quantity" > 0
+GROUP BY "Inspection Item", "ITEM_DESCRIPTION"
+ORDER BY "Total Rejected Quantity" DESC;
+
+Example 8 - Inspection rejections BY VENDOR (vendor specified):
+Question: "Show items with inspection rejections by vendor in last 6 months"
+SQL:
+SELECT 
+    "Vendor",
+    "Inspection Item",
+    "ITEM_DESCRIPTION",
+    SUM("Rejected Quantity") AS "Total Rejected Quantity",
+    COUNT(*) AS "Rejection Count"
+FROM IVINSPECTIONHISTORY
+WHERE "Company" = '{TenantId}'
+AND "Date Received" != ' '
+AND LENGTH(TRIM("Date Received")) = 10
+AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+AND "Rejected Quantity" > 0
+GROUP BY "Vendor", "Inspection Item", "ITEM_DESCRIPTION"
+ORDER BY "Vendor", "Total Rejected Quantity" DESC;
+
+CRITICAL DATE HANDLING FOR IVINSPECTIONHISTORY:
+==================================================================================
+The IVINSPECTIONHISTORY view stores ALL date columns as VARCHAR2 strings in 'YYYY-MM-DD' format.
+IMPORTANT: NULL dates are stored as ' ' (single space), which will cause ORA-01841 errors if not filtered.
+
+Date columns in IVINSPECTIONHISTORY (all VARCHAR2):
+- "Date Received" (DEFAULT - use when user doesn't specify which date)
+- "Inspected On"
+- "Alpha Date Received"
+- "Item Modification Date"
+- "Setup Date"
+- "Drawing Date"
+- "ECN Date"
+- "End of Life"
+- "Obsoleted On"
+
+ALWAYS filter out invalid dates BEFORE using TO_DATE():
+
+Correct pattern (CRITICAL - use both filters):
+✓ WHERE "Date Received" != ' '
+✓ AND LENGTH(TRIM("Date Received")) = 10
+✓ AND TO_DATE("Date Received", 'YYYY-MM-DD') >= TRUNC(SYSDATE) - 180
+
+Time ranges:
+- Last 1 month: TRUNC(SYSDATE) - 30
+- Last 3 months: TRUNC(SYSDATE) - 90
+- Last 6 months: TRUNC(SYSDATE) - 180
+- Last year: TRUNC(SYSDATE) - 365
+==================================================================================
+
+IMPORTANT REMINDERS:
+- ALWAYS include tenant filter
+- Select columns PRECISELY based on user's question keywords
+- If user says "by location" → include location columns, don't aggregate
+- If user says "by master location" → use ML-level columns
+- If user doesn't specify location → aggregate with GROUP BY Item
+- If user says "total" or "company-wide" → use SUM() and GROUP BY
+- For IVINSPECTIONHISTORY date filtering, ALWAYS add filters before TO_DATE()
+- DO NOT add ROWNUM or FETCH FIRST limits unless user asks for "top N"
+- Return ALL matching records by default
+- Use table aliases for clarity in multi-table queries
+- SELECT column order MUST match the order columns appear in the table schema definition
+- Calculated/aliased columns (e.g. "Shortage Quantity") always go at the END of SELECT
+- The same question must always produce the same SQL — be deterministic
+
+USER QUESTION: {user_query}
+
+CRITICAL OUTPUT FORMAT:
+You MUST respond with ONLY a valid JSON object. Do not include any explanation, markdown, or text outside the JSON.
+
+The JSON must follow this exact structure:
 {{
-  "sql": "SELECT ... FROM {self.table_name} WHERE "TenantId" = '{TenantId}' AND ...",
-  "orderby": null OR "column asc|desc",
-  "top": null OR <integer if LIMIT explicitly mentioned>
+  "thought_process": "Briefly list the steps taken: 1. Identify tables, 2. Identify date column strategy, 3. List filters.",
+  "sql": "THE_SQL_QUERY",
+  "tables_used": ["TABLE_NAMES"]
 }}
 
-USER REQUEST: "{user_query}"
+Rules:
+1. NO markdown code blocks (no ```json or ```)
+2. NO explanatory text before or after JSON
+3. Must be valid, parseable JSON
+4. "sql" field contains complete executable query
+5. Use \\n for line breaks in SQL string
 
-Analyze the request and generate the appropriate SQL query with MANDATORY "TenantId" = '{TenantId}' filter:"""
+Generate JSON now:
+"""
+
+        response_text = self.model_service.generate(self.PURPOSE, prompt).strip()
         
-        try:
-            response_text = self.model_service.generate_text(prompt).strip()
-
-            if not response_text:
-                raise RuntimeError("Empty response from Gemini")
-
-            result = safe_json_from_model(response_text)
-
-            # Validate that TenantId is in the SQL
-            if TenantId not in result.get('sql', ''):
-                raise RuntimeError(
-                    f"Generated SQL missing required TenantId filter: {TenantId}"
-                )
-
-            result.setdefault("top", None)
-            result.setdefault("orderby", None)
-
-            sql_upper = result['sql'].upper()
-            if 'GROUP BY' in sql_upper or any(agg in sql_upper for agg in ['COUNT(', 'SUM(', 'AVG(', 'MAX(', 'MIN(']):
-                query_type = "AGGREGATION"
-            elif 'DENSE_RANK()' in sql_upper or 'ROW_NUMBER()' in sql_upper:
-                query_type = "WINDOW_FUNCTION"
-            elif 'DISTINCT' in sql_upper:
-                query_type = "DISTINCT"
-            else:
-                query_type = "SIMPLE_SELECT"
-
-            print(f"\n[SQL_GEN] ✅ Generated SQL:")
-            print(f"[SQL_GEN] Type: {query_type}")
-            print(f"[SQL_GEN] Tenant: {TenantId}")
-
-            return result
-
-
-        except Exception as e:
-            print(f"[SQL_GEN] ❌ Failed: {e}")
-            raise RuntimeError(f"Gemini SQL generation failed: {e}")
+        print(f"[SQL GENERATOR] Raw response: {response_text[:500]}")
+        
+        result = safe_json_from_model(response_text)
+        print(f"[SQL GENERATOR] Parsed result: {result}")
+        
+        if not result or not isinstance(result, dict):
+            print(f"[SQL GENERATOR] ❌ Invalid response format: {result}")
+            raise ValueError(f"Invalid response format from model: {type(result)}")
+        
+        sql = result.get("sql", "").strip()
+        
+        if not sql:
+            print(f"[SQL GENERATOR] ❌ No SQL generated. Response: {result}")
+            raise ValueError("No SQL query generated by model")
+        
+        if TenantId not in sql:
+            print(f"[SQL GENERATOR] ⚠️  TenantId '{TenantId}' not found in generated SQL")
+            print(f"[SQL GENERATOR] SQL: {sql[:200]}")
+        
+        print(f"[SQL GENERATOR] ✅ SQL generated successfully")
+        return result

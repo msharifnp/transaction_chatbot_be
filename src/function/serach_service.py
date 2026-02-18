@@ -5,12 +5,17 @@ from typing import Dict, List, Optional, Any
 from fastapi import HTTPException, status
 import logging
 import os
+from src.utils.transaction_lookups import enrich_transaction_data
+
+logger = logging.getLogger(__name__)
+
 
 from src.schemas.schemas import (
     DatabaseResponseWrapper,
     MessageResponseWrapper,
     ChatResponseWrapper,
-    HybridResponseWrapper
+    HybridResponseWrapper,
+    UnifiedSearchRequest
 )
 from src.utils.utils import (
     safe_serialize,
@@ -20,13 +25,12 @@ from src.utils.utils import (
 )
 from src.config.db_config import Config as DatabaseConfig
 from src.config.redis_config import Config as RedisConfig
-from src.config.model_config import Config as GeminiConfig
 from src.ai.query_router import QueryRouter
 from src.ai.gemini_service import GeminiService
 from src.db.redis_service import RedisService
 from src.ai.sql_query_generator import SQLQueryGenerator
 from src.db.db_service import DatabaseService
-from src.db.model_service import ModelService
+from src.config.startup import model_startup 
 
 
 class SearchService:
@@ -34,11 +38,11 @@ class SearchService:
     MAX_ROWS = 100
     MAX_UI_ROWS = 5
     
-    def __init__(self):
+    def __init__(self, tenant_id: str = None):
+        self.tenant_id = tenant_id
        
         self.db_config = DatabaseConfig.get_database_config()
         self.redis_config = RedisConfig.get_redis_config()
-        self.model_config = GeminiConfig.get_gemini_config()
         self._init_services()
         self.router = QueryRouter(model_service=self.model_service)  
 
@@ -47,11 +51,14 @@ class SearchService:
         """Initialize all dependent services."""
         
         # Step 1: Initialize ModelService first (required by others)
-        self.model_service = ModelService(config=self.model_config)
+        
+        if self.tenant_id:
+            self.model_service = model_startup.get_or_create_service(self.tenant_id)
+        
         
         # Step 2: Initialize services that depend on ModelService
         self.gemini_service = GeminiService(self.model_service)
-        self.sql_generator = SQLQueryGenerator(config=self.db_config, model_service=self.model_service)
+        self.sql_generator = SQLQueryGenerator(model_service=self.model_service)
         
         # Step 3: Initialize independent services
         self.db_service = DatabaseService(self.db_config)
@@ -90,15 +97,17 @@ class SearchService:
         try:
             sql_result = self.sql_generator.generate_sql(query, TenantId=TenantId)
             sql = sql_result.get("sql")
+            print(f"[SQL GENERATED] {sql}")
         except Exception as e:
+            print(f"[SQL GENERATION ERROR] {str(e)}")
+            logging.error(f"SQL generation failed: {e}", exc_info=True)
             return {
                 "ok": False,
                 "error_type": "SQL_GENERATION_FAILED",
-                "user_message":(
-                    "Failed to generate database query."
+                "user_message": (
+                    "Failed to generate database query. "
                     "Please try again with accurate prompt."
                 )
-            
             }
         
         if not sql or TenantId not in sql:
@@ -113,10 +122,14 @@ class SearchService:
             }
         
         # Step 3: Execute SQL
-        print("[STEP 2] Executing on PostgreSQL...")
+        print("[STEP 2] Executing on Oracle...")
         try:
             rows = self.db_service.execute_query(sql)
             count = len(rows)
+            if rows and any(key in rows[0] for key in ["Source Type", "Source Qualifier"]):
+                print("[SEARCH] Detected transaction data - enriching with descriptions...")
+                rows = enrich_transaction_data(rows)
+                print("[SEARCH] ✅ Transaction data enriched")
             print(f"[RESULT] Retrieved {count} rows for tenant:{TenantId}")
         except Exception as e:
             return {
@@ -149,8 +162,38 @@ class SearchService:
             "index": system_index
         }
     
+
+
+
     
-    def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str = "general_qa") -> Dict[str, Any]:
+    
+    def _build_contextual_ai_query(self, query: str, conversation: Optional[List[Dict]]) -> str:
+        if not conversation:
+            return query
+
+        lines: List[str] = []
+        for msg in conversation:
+            role = msg.get("role", "")
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "user":
+                lines.append(f"User: {content}")
+            elif role == "assistant":
+                lines.append(f"Assistant: {content}")
+
+        if not lines:
+            return query
+
+        context_lines = "\n".join(lines)
+        return (
+            "Conversation Context (last 2 user + last 2 assistant turns):\n"
+            f"{context_lines}\n\n"
+            "Current User Question:\n"
+            f"{query}"
+        )
+
+    def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str = "summary") -> Dict[str, Any]:
 
         self.redis_service.validate_tenant_session(TenantId, SessionId)
 
@@ -166,11 +209,18 @@ class SearchService:
             )
 
             # 2️⃣ Get context
-            system_data, _ = self.redis_service.get_context_for_ai(
+            system_data, conversation = self.redis_service.get_context_for_ai(
                 TenantId, SessionId
             )
 
-            
+            if not system_data:
+                raise ValueError("No cached data found for AI analysis")
+
+            contextual_query = self._build_contextual_ai_query(
+                query=query,
+                conversation=conversation
+            )
+
 
             print(f"[AI MODE] Processing with {len(system_data)} stored rows")
 
@@ -179,7 +229,7 @@ class SearchService:
             # =====================================================
             if intent == "summary":
                 analysis = self.gemini_service.generate_summary(
-                    user_query=query,
+                    user_query=contextual_query,
                     rows=system_data[:self.MAX_ROWS]
                 )
 
@@ -204,7 +254,7 @@ class SearchService:
             # =====================================================
             elif intent == "forecast":
                 forecast_result = self.gemini_service.generate_forecast(
-                    user_query=query,
+                    user_query=contextual_query,
                     rows=system_data[:self.MAX_ROWS]
                     
                 )
@@ -224,7 +274,7 @@ class SearchService:
                 
 
                 chart = self.gemini_service.generate_forecast_chart(
-                    user_query= query,
+                    user_query=contextual_query,
                     forecast_rows= forecast_rows
                 )
 
@@ -263,7 +313,7 @@ class SearchService:
             
             elif intent == "chart":
                 chart = self.gemini_service.generate_chart(
-                    query,
+                    contextual_query,
                     system_data[:self.MAX_ROWS]
                 )
 
@@ -300,26 +350,7 @@ class SearchService:
             # 🟢 GENERAL QA
             # =====================================================
             else:
-                analysis = self.gemini_service.generate_general_qa(
-                    user_query=query,
-                    rows= system_data[:self.MAX_ROWS]
-                    )
-
-                index = self.redis_service.store_message(
-                    TenantId=TenantId,
-                    SessionId=SessionId,
-                    role="assistant",
-                    content=analysis,
-                    metadata={"intent": "general_qa"}
-                )
-
-                return {
-                    "analysis_text": {
-                        "text": analysis,
-                        "index": index
-                    },
-                    "chart":None
-                }
+                raise ValueError(f"Unsupported AI intent: {intent}")
 
         except Exception as e:
             print(f"[AI MODE] ❌ Error: {e}")
@@ -351,8 +382,18 @@ class SearchService:
     # UNIFIED SEARCH (MAIN ORCHESTRATOR)
     # ===============================================================
     
-    def unified_search(self, req) -> Any:
-       
+    def unified_search(self, req: UnifiedSearchRequest, session_id: str) -> Any:
+        """
+        Main orchestrator for unified search.
+        
+        Args:
+            req: Request containing the user's query
+            session_id: Session ID from request headers
+            
+        Returns:
+            One of: DatabaseResponseWrapper, MessageResponseWrapper, 
+                    ChatResponseWrapper, or HybridResponseWrapper
+        """
         try:
             # Validate Gemini availability
             if not self.use_gemini:
@@ -367,21 +408,17 @@ class SearchService:
                     }
                 )
             
-            
-            
-            TenantId = (req.TenantId or "").strip()
+            TenantId = self.tenant_id
             query = (req.query or "").strip()
             
             if not query:
                 raise HTTPException(status_code=400, detail="Query cannot be empty")
             
-            # self._log_unified_start(TenantId, req.SessionId, query)
-            
             # ===== HANDLE REFRESH REQUESTS =====
             if is_refresh_request(query):
                 print("[REFRESH] User requested fresh data (YES/OK detected).")
                 
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id)  # ✅ Fixed
                 last_user_query = get_last_real_user_query(all_messages)
                 
                 if not last_user_query:
@@ -417,8 +454,9 @@ class SearchService:
                 result = self.search(
                     query=combined_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,  # ✅ Fixed
                 )
+                
                 
                 if result.get("error_type"):
                     return MessageResponseWrapper(
@@ -477,7 +515,7 @@ class SearchService:
             # ===== STEP 1: INTELLIGENT ROUTING =====
             print("[STEP 1] Analyzing query for intelligent routing...")
             
-            routing_decision = self.router.intelligent_route(query, TenantId, req.SessionId)
+            routing_decision = self.router.intelligent_route(query, TenantId, session_id)
             if routing_decision.get("router_error"):
                 error_detail = routing_decision.get("router_error_detail")
                 print(f"[ROUTER] ❌ Router failure: {error_detail}")
@@ -497,6 +535,10 @@ class SearchService:
             
             mode = routing_decision["mode"]
             reasoning = routing_decision["reasoning"]
+
+            # Legacy mode is no longer supported; treat as database request.
+            if mode == "__unused_filter_cached__":
+                mode = "database"
             
             print(f"[ROUTER] 🎯 Decision: {mode.upper()}")
             print(f"[ROUTER] 📝 Reasoning: {reasoning}")
@@ -525,7 +567,7 @@ class SearchService:
                 result = self.search(
                     query=refined_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId
+                    SessionId=session_id
                 )
                 
                 if result.get("error_type"):
@@ -586,7 +628,7 @@ class SearchService:
                 print("[STEP 2] Executing AI_CACHED mode (checking cache for AI task)...")
                 
                 # Check if data exists in cache
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages
@@ -614,13 +656,13 @@ class SearchService:
                 print(f"[CACHE] Found cached data - performing AI analysis")
                 
                 refined_query = routing_decision.get("refined_query", query)
-                intent = routing_decision.get("intent", "general_qa")
+                intent = routing_decision.get("intent", "summary")
                 
                 print(f"[AI] Intent: {intent}")
                 
                 result = self.process_model_query(
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,
                     query=refined_query,
                     intent=intent
                 )
@@ -661,11 +703,11 @@ class SearchService:
                 )
             
             # ===== FILTER_CACHED MODE (Pending/Verified/Expired without date) =====
-            elif mode == "filter_cached":
+            elif mode == "__unused_filter_cached__":
                 print("[STEP 2] Executing FILTER_CACHED mode (using last system data)...")
                 
                 # Check if data exists in cache
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages
@@ -693,13 +735,13 @@ class SearchService:
                 print(f"[CACHE] Using last retrieved data for analysis")
                 
                 refined_query = routing_decision.get("refined_query", query)
-                intent = routing_decision.get("intent", "general_qa")
+                intent = routing_decision.get("intent", "summary")
                 
                 print(f"[AI] Intent: {intent}")
                 
                 result = self.process_model_query(
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,
                     query=refined_query,
                     intent=intent
                 )
@@ -771,7 +813,7 @@ class SearchService:
                 db_result = self.search(
                     query=db_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId
+                    SessionId=session_id
                 )
                 
                 if db_result.get("error_type"):
@@ -816,7 +858,7 @@ class SearchService:
                 
                 # Step 2b: Perform AI analysis on the fresh data
                 ai_query = routing_decision.get("ai_query", query)
-                intent = routing_decision.get("intent", "general_qa")
+                intent = routing_decision.get("intent", "summary")
                 
                 print(f"[HYBRID-AI] Analyzing with intent: {intent}")
                 
@@ -826,7 +868,7 @@ class SearchService:
                 
                 ai_result = self.process_model_query(
                         TenantId=TenantId,
-                        SessionId=req.SessionId,
+                        SessionId=session_id,
                         query=ai_query,
                         intent=intent
                     )
@@ -897,11 +939,20 @@ class SearchService:
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[API] Unified search failed: {e}")
-            traceback.print_exc()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Service temporarily unavailable. Please try again later."
+            logger.error(f"[API] Unified search failed: {e}", exc_info=True)
+
+            return MessageResponseWrapper(
+                success=False,
+                code=500,
+                message="Service temporarily unavailable",
+                errors=["UNIFIED_SEARCH_FAILED"],
+                data={
+                    "response_type": "message",
+                    "response_message": (
+                        "Something went wrong while processing your request. "
+                        "Please try again in a few moments."
+                    )
+                }
             )
-    
+
     

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional,Tuple
 from difflib import get_close_matches
 from zoneinfo import ZoneInfo
-from src.config.field_constant import FIELD_TYPES,FIELD_ALIASES, MONTH_NAMES
+from src.config.field_constant import TABLE_SCHEMAS
 from io import StringIO
 from dotenv import load_dotenv
 import os  

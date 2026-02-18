@@ -5,8 +5,8 @@ from datetime import datetime,date
 class UnifiedSearchRequest(BaseModel):
     """Unified search request - router decides mode automatically"""
     query: str = Field(..., description="User's search query")
-    TenantId: str = Field(..., description="Tenant identifier")
-    SessionId: str = Field(..., description="Session identifier for conversation tracking")
+    #TenantId: str = Field(..., description="Tenant identifier")
+    #SessionId: str = Field(..., description="Session identifier for conversation tracking")
 
 class DatabaseSearchRequest(BaseModel):
     """Legacy - Database-only search request"""
@@ -75,6 +75,7 @@ class BaseResponse(BaseModel):
     code: int = Field(description="HTTP status code")
     message: str = Field(description="Response message")
     errors: List[str] = Field(default_factory=list, description="List of errors if any")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata (e.g., new_session_id)")
 
 class DatabaseResponseWrapper(BaseResponse):
     """Wrapper for database responses"""
@@ -96,24 +97,31 @@ class HybridResponseWrapper(BaseResponse):
     """Wrapper for hybrid mode responses"""
     data: HybridResponseData
 
-class ExportBaseRequest(BaseModel):
-    TenantId: str
-    SessionId: str
+
+    
+    
+    
+    
+    
+
+class ExportPdfRequest(BaseModel):
     index: int
-
-class ExportWordRequest(ExportBaseRequest):
-    title: str=Field(default="Financial Report")
-
-class ExportPdfRequest(ExportBaseRequest):
-    title: str=Field(default="Financial Report")
+    title: str | None = "Financial Report"
     output_dir: Optional[str] = None
-    
-class ExportExcelRequest(ExportBaseRequest):
-    sheet_name: str=Field(default="Financial Data")
-    
-class ExportPngRequest(ExportBaseRequest):
-    width: int=Field(default=1920)
-    height: int=Field(default=1120)
+
+class ExportWordRequest(BaseModel):
+    index: int
+    title: str | None = "Financial Report"
+
+class ExportExcelRequest(BaseModel):
+    index: int
+    sheet_name: str | None = "Financial Data"
+
+
+class ExportPngRequest(BaseModel):
+    index: int
+    width: int = Field(default=1920)
+    height: int = Field(default=1120)
    
 
 class HealthResponse(BaseModel):
@@ -126,21 +134,22 @@ class HealthResponse(BaseModel):
     
 
 class ComparisonRequest(BaseModel):
-    TenantId: str 
-    SessionId: str
     AccountNumber: str 
     CurrentDate: date
    
-class ComparisonResult(BaseModel):
+
+
+class ComparisonFileData(BaseModel):
     response_type: Literal["comparison"] = "comparison"
-    tenant_id: str
-    session_id: str
-    account_number: str
-    file_path: str
-
-
+    CurrentDate: date
+    AccountNumber: str
+    file_id: int
+    file_name: str
+    file_size: int
+    created_at: str
+    
 
 class ComparisonResponse(BaseResponse):
-    data: Optional[ComparisonResult] = None
+    data: Optional[ComparisonFileData] = None
     
     

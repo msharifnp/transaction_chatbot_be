@@ -1,119 +1,319 @@
 
+# from typing import List, Dict, Optional, Tuple
+# from src.config.db_config import DatabaseConfig
+# import oracledb
+# from decimal import Decimal
+
+# class DatabaseService:
+#     """Oracle database service for queries."""
+
+#     def __init__(self, config: DatabaseConfig):
+#         """Initialize database service."""
+#         self.config = config
+#         self.connection = None
+#         self._connect()
+
+#     def _connect(self) -> None:
+#         """Establish Oracle database connection."""
+#         try:
+#             if self.connection is not None:
+#                 try:
+#                     if self.connection.ping() is None:
+#                         return
+#                 except Exception:
+#                     pass
+
+#             # Check if database config is in Easy Connect format (host:port/service)
+#             if ':' in self.config.database and '/' in self.config.database:
+#                 # Easy Connect format: "host:port/service"
+#                 dsn = self.config.database
+#                 print(f"[DB] Connecting to Oracle using Easy Connect: {dsn}...")
+#             else:
+#                 # Traditional format: separate host, port, service
+#                 print(f"[DB] Connecting to Oracle at {self.config.host}:{self.config.port}/{self.config.database}...")
+#                 dsn = oracledb.makedsn(self.config.host, self.config.port, service_name=self.config.database)
+            
+#             self.connection = oracledb.connect(
+#                 user=self.config.user,
+#                 password=self.config.password,
+#                 dsn=dsn
+#             )
+
+#             print("[DB] Connection established")
+#         except oracledb.Error as e:
+#             print(f"[DB] Connection failed: {e}")
+#             self.connection = None
+
+#     def execute_query(self, sql: str, params: Optional[Tuple] = None) -> List[Dict]:
+#         """
+#         Execute SQL query and return results as list of dictionaries.
+#         """
+#         try:
+#             if self.connection is None:
+#                 raise RuntimeError("Database connection is not available")
+
+#             cursor = self.connection.cursor()
+
+#             print(f"\n[DB] Executing SQL:")
+#             print(f"[DB] {sql}")
+#             if params:
+#                 print(f"[DB] Params: {params}")
+
+#             if params:
+#                 cursor.execute(sql, params)
+#             else:
+#                 cursor.execute(sql)
+
+#             columns = [col[0] for col in cursor.description]
+#             rows = cursor.fetchall()
+
+#             results = []
+#             for row in rows:
+#                 row_dict = {}
+#                 for i, value in enumerate(row):
+#                     if hasattr(value, 'isoformat'):
+#                         row_dict[columns[i]] = value.isoformat()
+#                     elif isinstance(value, Decimal):
+#                         row_dict[columns[i]] = float(value)
+#                     else:
+#                         row_dict[columns[i]] = value
+#                 results.append(row_dict)
+
+#             cursor.close()
+#             print(f"[DB] ✅ Query returned {len(results)} rows")
+#             return results
+
+#         except oracledb.Error as e:
+#             print(f"[DB] ❌ Query execution failed: {e}")
+#             print(f"[DB] SQL: {sql}")
+#             raise
+
+#     def execute_update(self, sql: str, params: Optional[Tuple] = None) -> int:
+#         """
+#         Execute UPDATE/INSERT/DELETE query without returning data.
+#         """
+#         try:
+#             if self.connection is None:
+#                 raise RuntimeError("Database connection is not available")
+
+#             cursor = self.connection.cursor()
+
+#             print(f"\n[DB] Executing SQL:")
+#             print(f"[DB] {sql}")
+#             if params:
+#                 print(f"[DB] Params: {params}")
+#             if params:
+#                 cursor.execute(sql, params)
+#             else:
+#                 cursor.execute(sql)
+
+#             affected_rows = cursor.rowcount
+#             self.connection.commit()
+#             cursor.close()
+#             print(f"[DB] ✅ Updated {affected_rows} row(s)")
+#             return affected_rows
+
+#         except oracledb.Error as e:
+#             print(f"[DB] ❌ Query execution failed: {e}")
+#             print(f"[DB] SQL: {sql}")
+#             raise
+
+#     def close(self) -> None:
+#         """Close database connection."""
+#         if self.connection:
+#             self.connection.close()
+#             print("[DB] Connection closed")
+
+#     def __enter__(self):
+#         return self
+
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         self.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 from typing import List, Dict, Optional, Tuple
 from src.config.db_config import DatabaseConfig
-import psycopg2
+import oracledb
 from decimal import Decimal
 
-
 class DatabaseService:
-    """PostgreSQL database service for invoice queries."""
+    """Oracle database service with connection pooling."""
     
+    _pool = None
+    _pool_config = None
+
     def __init__(self, config: DatabaseConfig):
         """Initialize database service."""
         self.config = config
         self.connection = None
         self._connect()
-    
+
     def _connect(self) -> None:
-        """Establish database connection."""
+        """Establish Oracle database connection using connection pool."""
         try:
-            if self.connection is not None:
-                # If already connected and not closed, reuse it
-                try:
-                    if self.connection.closed == 0:
-                        return
-                except AttributeError:
-                    # If connection object doesn't have .closed, ignore and reconnect
-                    pass
+            # Create pool once (class-level singleton)
+            if DatabaseService._pool is None:
+                # Check if database config is in Easy Connect format (host:port/service)
+                if ':' in self.config.database and '/' in self.config.database:
+                    # Easy Connect format: "host:port/service"
+                    dsn = self.config.database
+                    print(f"[DB POOL] Creating connection pool for Oracle: {dsn}")
+                else:
+                    # Traditional format: separate host, port, service
+                    dsn = oracledb.makedsn(self.config.host, self.config.port, service_name=self.config.database)
+                    print(f"[DB POOL] Creating connection pool for Oracle: {self.config.host}:{self.config.port}/{self.config.database}")
                 
-            print(f"[DB] Connecting to PostgreSQL at {self.config.host}:{self.config.port}:{self.config.database}...")
+                DatabaseService._pool = oracledb.create_pool(
+                    user=self.config.user,
+                    password=self.config.password,
+                    dsn=dsn,
+                    min=2,          # Minimum connections in pool
+                    max=10,         # Maximum connections in pool
+                    increment=1,    # Increment when pool needs to grow
+                    getmode=oracledb.POOL_GETMODE_WAIT,  # Wait if no connection available
+                    timeout=30      # Wait timeout in seconds
+                )
+                DatabaseService._pool_config = {
+                    'dsn': dsn,
+                    'min': 2,
+                    'max': 10
+                }
+                print(f"[DB POOL] ✅ Connection pool created (min=2, max=10)")
             
-            self.connection = psycopg2.connect(
-                host=self.config.host,
-                port=self.config.port,
-                database=self.config.database,
-                user=self.config.user,
-                password=self.config.password,
-                connect_timeout=self.config.timeout
-            )
-            # autocommit mode (optional but safe for SELECT-only workloads)
-            self.connection.autocommit = True
-            
-            print("[DB] Connection established")
-        except psycopg2.Error as e:
-            print(f"[DB] Connection failed: {e}")
+            # Acquire connection from pool
+            if self.connection is None:
+                self.connection = DatabaseService._pool.acquire()
+                print(f"[DB POOL] ✅ Connection acquired from pool (open={DatabaseService._pool.opened}, busy={DatabaseService._pool.busy})")
+                
+        except oracledb.Error as e:
+            print(f"[DB POOL] ❌ Connection failed: {e}")
             self.connection = None
-            
-     
+
     def execute_query(self, sql: str, params: Optional[Tuple] = None) -> List[Dict]:
         """
         Execute SQL query and return results as list of dictionaries.
-        
-        Args:
-            sql: SQL query string
-            params: Query parameters (optional)
-            
-        Returns:
-            List of row dictionaries
         """
         try:
-            if self.connection is None or getattr(self.connection, "closed",False):
+            if self.connection is None:
                 raise RuntimeError("Database connection is not available")
-        
+
             cursor = self.connection.cursor()
-            
+
             print(f"\n[DB] Executing SQL:")
             print(f"[DB] {sql}")
             if params:
                 print(f"[DB] Params: {params}")
-            
+
             if params:
                 cursor.execute(sql, params)
             else:
                 cursor.execute(sql)
-            
-            # Get column names
-            columns = [column[0] for column in cursor.description]
-            
-            # Fetch all rows
+
+            columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
-            
-            
-            # Convert to list of dictionaries
+
             results = []
             for row in rows:
                 row_dict = {}
                 for i, value in enumerate(row):
-                    # Handle datetime serialization
                     if hasattr(value, 'isoformat'):
                         row_dict[columns[i]] = value.isoformat()
-                    elif isinstance(value,Decimal):
+                    elif isinstance(value, Decimal):
                         row_dict[columns[i]] = float(value)
                     else:
                         row_dict[columns[i]] = value
                 results.append(row_dict)
-            
+
             cursor.close()
-            
             print(f"[DB] ✅ Query returned {len(results)} rows")
-                      
             return results
-            
-        except psycopg2.Error as e:
+
+        except oracledb.Error as e:
             print(f"[DB] ❌ Query execution failed: {e}")
             print(f"[DB] SQL: {sql}")
             raise
-    
+
+    def execute_update(self, sql: str, params: Optional[Tuple] = None) -> int:
+        """
+        Execute UPDATE/INSERT/DELETE query without returning data.
+        """
+        try:
+            if self.connection is None:
+                raise RuntimeError("Database connection is not available")
+
+            cursor = self.connection.cursor()
+
+            print(f"\n[DB] Executing SQL:")
+            print(f"[DB] {sql}")
+            if params:
+                print(f"[DB] Params: {params}")
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+
+            affected_rows = cursor.rowcount
+            self.connection.commit()
+            cursor.close()
+            print(f"[DB] ✅ Updated {affected_rows} row(s)")
+            return affected_rows
+
+        except oracledb.Error as e:
+            print(f"[DB] ❌ Query execution failed: {e}")
+            print(f"[DB] SQL: {sql}")
+            raise
+
     def close(self) -> None:
-        """Close database connection."""
+        """Release connection back to pool."""
         if self.connection:
             self.connection.close()
-            print("[DB] Connection closed")
-    
+            if DatabaseService._pool:
+                print(f"[DB POOL] Connection released (open={DatabaseService._pool.opened}, busy={DatabaseService._pool.busy})")
+            else:
+                print("[DB] Connection closed")
+            self.connection = None
+
+    @classmethod
+    def close_pool(cls):
+        """Close the entire connection pool (call on application shutdown)."""
+        if cls._pool:
+            cls._pool.close()
+            print("[DB POOL] ✅ Connection pool closed")
+            cls._pool = None
+            cls._pool_config = None
+
+    @classmethod
+    def get_pool_stats(cls) -> Dict:
+        """Get current pool statistics."""
+        if cls._pool:
+            return {
+                'opened': cls._pool.opened,
+                'busy': cls._pool.busy,
+                'min': cls._pool_config.get('min', 0),
+                'max': cls._pool_config.get('max', 0),
+                'dsn': cls._pool_config.get('dsn', 'Unknown')
+            }
+        return {}
+
     def __enter__(self):
-        """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
         self.close()
