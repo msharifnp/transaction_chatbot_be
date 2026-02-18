@@ -3,7 +3,7 @@ from typing import Dict
 TABLE_SCHEMAS: Dict[str, Dict] = {
     
 "IVINSPECTIONHISTORY": {
-  "description": "Inventory or item  Inspection transaction History including item master, company item settings, and inspection details.",
+  "description": "Inventory or item  Inspection transaction History .",
   "columns": {
     "Company": "VARCHAR2(10)-",
     "Company Name": "VARCHAR2(200)",
@@ -129,7 +129,7 @@ TABLE_SCHEMAS: Dict[str, Dict] = {
   }
 },
 "ITRN_HISTORY_VW": {
-   "description": "item inventory transaction history , combining item master data, company item settings, cost information, lot details, and inventory balances across multiple locations and master locations.",
+   "description": "item inventory transaction history.",
     "columns": {
         "Company Code": "VARCHAR2(10)",
         "Master Location": "VARCHAR2",
@@ -188,7 +188,7 @@ TABLE_SCHEMAS: Dict[str, Dict] = {
     }
 },
 "IVONHANDBYLOCATION": {
-    "description": "Inventory on hand by location, including item master data, company item settings, lot details, and inventory balances across multiple locations and master locations.",
+    "description": "Inventory on hand by location .",
     "columns": {
         "COST_AS_OF_DATE": "VARCHAR2 - Date when the cost was last updated. If specific date is not mentioned, use this column as reference for the inventory on hand data.",
         "Cost Item": "VARCHAR2",
@@ -581,7 +581,7 @@ TABLE_SCHEMAS: Dict[str, Dict] = {
 },
 
     "XV_REC_HIS_VW": {
-    "description": "Receiver transaction history view containing detailed receiving transactions including vendor information, item details, quantities, pricing, voucher data, inspection results, and financial amounts across company locations.",
+    "description": "Receiver transaction history .",
     "columns": {
         "Company Code": "VARCHAR2",
         "Master Location": "VARCHAR2",

@@ -83,6 +83,9 @@ Choose exactly one mode:
 
 4) "hybrid"
 - Query needs BOTH fresh database fetch and AI analysis together.
+- Use ONLY when the same user question explicitly requests analysis output
+  (summary/insights/explain), forecasting, or charts/graphs together with fresh data retrieval.
+- If user only asks to fetch/list/show records (even with date filters), use "database" not "hybrid".
 
 Intent rules for ai_cached/hybrid:
 - Allowed intents only: "summary", "forecast", "chart"

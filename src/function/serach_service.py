@@ -2,6 +2,7 @@ import json
 import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+import re
 from fastapi import HTTPException, status
 import logging
 import os
@@ -192,6 +193,17 @@ class SearchService:
             "Current User Question:\n"
             f"{query}"
         )
+
+    @staticmethod
+    def _is_hybrid_requested_by_user(query: str) -> bool:
+        q = (query or "").lower()
+        summary_terms = [
+            "summarize", "summary", "insight", "insights", "explain", "analysis", "analyze", "trend", "trends"
+        ]
+        forecast_terms = ["forecast", "predict", "projection", "future", "next month", "next quarter", "next year"]
+        chart_terms = ["chart", "graph", "plot", "visualization", "visualize", "dashboard"]
+        tokens = summary_terms + forecast_terms + chart_terms
+        return any(re.search(rf"\b{re.escape(t)}\b", q) for t in tokens)
 
     def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str = "summary") -> Dict[str, Any]:
 
@@ -539,6 +551,13 @@ class SearchService:
             # Legacy mode is no longer supported; treat as database request.
             if mode == "__unused_filter_cached__":
                 mode = "database"
+
+            # Enforce strict HYBRID usage:
+            # Only use hybrid when user explicitly asks for summarize/forecast/chart-style output.
+            if mode == "hybrid" and not self._is_hybrid_requested_by_user(query):
+                print("[ROUTER] ⚠️ HYBRID downgraded to DATABASE (no explicit analysis/forecast/chart intent).")
+                mode = "database"
+                routing_decision["refined_query"] = routing_decision.get("database_query", query)
             
             print(f"[ROUTER] 🎯 Decision: {mode.upper()}")
             print(f"[ROUTER] 📝 Reasoning: {reasoning}")

@@ -390,13 +390,13 @@ ABSOLUTE OUTPUT RULES:
 
 Generate a professional operations report aimed at supply chain, quality, and operations leaders with the following sections:
 
-## 1. Executive Summary (2–4 sentences)
+##  Executive Summary (2–4 sentences)
 - Briefly describe the dataset scope (time period, record count, data type)
 - Highlight the single most important operational finding
 - Reference key metrics (quantities, values, counts)
 - Set context for decision-makers
 
-## 2. Quality & Inspection Analysis (if applicable)
+##  Quality & Inspection Analysis (if applicable)
 **For Inspection Data:**
 - Total inspections performed and date range
 - Acceptance vs. Rejection rates (calculate percentages)
@@ -408,7 +408,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 
 **Skip this section if not inspection data**
 
-## 3. Inventory Movement & Transactions (if applicable)
+##  Inventory Movement & Transactions (if applicable)
 **For Transaction Data:**
 - Total transaction volume and types (receipts, issues, adjustments, transfers)
 - Most active items by transaction count
@@ -419,7 +419,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 
 **Skip this section if not transaction data**
 
-## 4. Receipt & Procurement Analysis (if applicable)
+##  Receipt & Procurement Analysis (if applicable)
 **For Receipt Data:**
 - Total receipts processed and value
 - Top vendors by receipt volume and value
@@ -430,7 +430,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 
 **Skip this section if not receipt data**
 
-## 5. Inventory Status & Stock Levels (if applicable)
+##  Inventory Status & Stock Levels (if applicable)
 **For On-Hand Inventory:**
 - Total inventory value across all locations
 - Inventory distribution by location/warehouse
@@ -441,7 +441,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 
 **Skip this section if not inventory on-hand data**
 
-## 6. Item & Product Analysis
+##  Item & Product Analysis
 - Top items by transaction volume, value, or quantity
 - Item classification (A/B/C analysis if applicable)
 - Product line or commodity analysis
@@ -449,7 +449,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 - Item diversity vs. concentration
 - Critical items identification
 
-## 7. Operational Insights & Patterns
+##  Operational Insights & Patterns
 - Time-based patterns (monthly, seasonal trends)
 - Process efficiency indicators
 - Bottlenecks or delays identified
@@ -458,7 +458,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 - Unexpected findings or anomalies
 - Performance metrics summary
 
-## 8. Risk Factors & Red Flags
+##  Risk Factors & Red Flags
 - Quality risks (high rejection rates, critical item failures)
 - Inventory risks (stockouts, excess inventory, obsolescence)
 - Vendor risks (poor quality, delivery issues)
@@ -467,7 +467,7 @@ Generate a professional operations report aimed at supply chain, quality, and op
 - Operational risks (capacity constraints, single-source dependencies)
 - Data quality issues requiring attention
 
-## 9. Key Recommendations (4–6 bullet points)
+##  Key Recommendations (4–6 bullet points)
 - Provide concrete, action-oriented recommendations
 - Prioritize based on impact and urgency
 - Quality improvement actions (if quality issues found)
