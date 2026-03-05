@@ -29,7 +29,6 @@ def validate_and_fix_spec(
     time_bucket = fixed.get("time_bucket")
     fixed["time_bucket"] = time_bucket if time_bucket in ALLOWED_TIME_BUCKETS else None
 
-    # group_by
     gb = fixed.get("group_by") or []
     gb_fixed: List[str] = []
     for c in gb:
@@ -38,7 +37,6 @@ def validate_and_fix_spec(
             gb_fixed.append(fc)
     fixed["group_by"] = gb_fixed
 
-    # metrics
     metrics = fixed.get("metrics") or []
     m_fixed: List[Dict[str, str]] = []
     for m in metrics:
@@ -53,7 +51,6 @@ def validate_and_fix_spec(
             agg_raw = "sum"
 
         if agg_raw == "count":
-            # allow row-count even if no column
             m_fixed.append({"col": "__rows__", "agg": "count"})
             continue
 
@@ -61,7 +58,6 @@ def validate_and_fix_spec(
         if not col:
             continue
 
-        # enforce numeric metrics unless it's count
         if field_types.get(col) != "number":
             continue
 
@@ -69,7 +65,6 @@ def validate_and_fix_spec(
 
     fixed["metrics"] = m_fixed
 
-    # sort_by
     sb = fixed.get("sort_by")
     if isinstance(sb, dict):
         sb_col = _fix_col(str(sb.get("col") or ""), available_cols)
@@ -77,21 +72,18 @@ def validate_and_fix_spec(
     else:
         fixed["sort_by"] = None
 
-    # limit
     limit = fixed.get("limit")
     try:
         fixed["limit"] = int(limit) if limit is not None else None
     except Exception:
         fixed["limit"] = None
 
-    # Defaults: metrics
     if not fixed["metrics"]:
         if "grand_total" in available_cols and field_types.get("grand_total") == "number":
             fixed["metrics"] = [{"col": "grand_total", "agg": "sum"}]
         else:
             fixed["metrics"] = [{"col": "__rows__", "agg": "count"}]
 
-    # Defaults: group_by
     if not fixed["group_by"]:
         if fixed["task"] == "forecast" and "invoice_date" in available_cols:
             fixed["group_by"] = ["invoice_date"]
@@ -123,7 +115,6 @@ def aggregate_rows(
     metrics = spec["metrics"]
     time_bucket = spec.get("time_bucket")
 
-    # If invoice_date is present and time_bucket requested, bucket it
     if time_bucket and "invoice_date" in group_cols and "invoice_date" in df.columns:
         df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce")
 
@@ -138,7 +129,6 @@ def aggregate_rows(
 
         group_cols = ["_bucket" if c == "invoice_date" else c for c in group_cols]
 
-    # Keep only needed columns
     needed = set(group_cols)
     for m in metrics:
         col = m["col"]
@@ -147,13 +137,11 @@ def aggregate_rows(
 
     df = df[[c for c in needed if c in df.columns]].copy()
 
-    # Convert metric columns to numeric
     for m in metrics:
         col = m["col"]
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Build aggregation map
     agg_map: Dict[str, str] = {}
     for m in metrics:
         col = m["col"]
@@ -163,35 +151,28 @@ def aggregate_rows(
         if col in df.columns:
             agg_map[col] = {"sum": "sum", "avg": "mean", "min": "min", "max": "max"}[agg]
 
-    # Aggregate
     if agg_map:
         out = df.groupby(group_cols, dropna=False).agg(agg_map).reset_index()
     else:
         out = df.groupby(group_cols, dropna=False).size().reset_index(name="count")
 
-    # Add row count metric if requested
     if any(m["agg"] == "count" for m in metrics):
         counts = df.groupby(group_cols, dropna=False).size().reset_index(name="count")
         if "count" in out.columns:
-            # already present
             pass
         else:
             out = out.merge(counts, on=group_cols, how="left")
-
-    # Rename bucket column
+            
     if "_bucket" in out.columns:
         out = out.rename(columns={"_bucket": "invoice_date_bucket"})
 
-    # Sort
     sb = spec.get("sort_by")
     if sb and sb.get("col") in out.columns:
         out = out.sort_values(by=sb["col"], ascending=not sb.get("desc", True))
 
-    # Guard: too many groups -> trim
     if len(out) > max_groups:
         out = out.head(max_groups)
 
-    # Limit
     if spec.get("limit"):
         out = out.head(spec["limit"])
 

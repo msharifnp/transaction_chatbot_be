@@ -4,13 +4,16 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from fastapi import HTTPException, status
 import logging
-import os
+import base64
+
+logger = logging.getLogger(__name__)
 
 from src.schemas.schemas import (
     DatabaseResponseWrapper,
     MessageResponseWrapper,
     ChatResponseWrapper,
-    HybridResponseWrapper
+    HybridResponseWrapper,
+    UnifiedSearchRequest
 )
 from src.utils.utils import (
     safe_serialize,
@@ -20,63 +23,50 @@ from src.utils.utils import (
 )
 from src.config.db_config import Config as DatabaseConfig
 from src.config.redis_config import Config as RedisConfig
-from src.config.model_config import Config as GeminiConfig
 from src.ai.query_router import QueryRouter
-from src.ai.gemini_service import GeminiService
+from src.ai.forecast import ForecastService
+from src.ai.chart import ChartService
+from src.ai.summary import SummaryService
+from src.ai.general_qa import QAService
 from src.db.redis_service import RedisService
 from src.ai.sql_query_generator import SQLQueryGenerator
 from src.db.db_service import DatabaseService
-from src.db.model_service import ModelService
+from src.config.startup import model_startup 
 
 
 class SearchService:
-       
-    MAX_ROWS = 100
+         
     MAX_UI_ROWS = 5
     
-    def __init__(self):
-       
+    def __init__(self, tenant_id: str = None):
+        self.tenant_id = tenant_id
         self.db_config = DatabaseConfig.get_database_config()
         self.redis_config = RedisConfig.get_redis_config()
-        self.model_config = GeminiConfig.get_gemini_config()
         self._init_services()
         self.router = QueryRouter(model_service=self.model_service)  
 
     
     def _init_services(self):
-        """Initialize all dependent services."""
         
-        # Step 1: Initialize ModelService first (required by others)
-        self.model_service = ModelService(config=self.model_config)
-        
-        # Step 2: Initialize services that depend on ModelService
-        self.gemini_service = GeminiService(self.model_service)
+        if self.tenant_id:
+            self.model_service = model_startup.get_or_create_service(self.tenant_id)
+        self.forecast_service = ForecastService(self.model_service)
+        self.chart_service = ChartService(self.model_service)
+        self.summary_service = SummaryService(self.model_service)
+        self.QA_service = QAService(self.model_service)
         self.sql_generator = SQLQueryGenerator(config=self.db_config, model_service=self.model_service)
-        
-        # Step 3: Initialize independent services
-        self.db_service = DatabaseService(self.db_config)
-        
-        
+        self.db_service = DatabaseService(self.db_config)        
         self.redis_service = RedisService(self.redis_config)
-        
-        # Get database config
         self.db_settings = self.db_config
     
     @property
     def use_gemini(self) -> bool:
-        """Check if Gemini service is available."""
         return self.model_service.is_available()
-    
-    
-    # ===============================================================
-    # DATABASE MODE
-    # ===============================================================
     
     def search(self, query: str, TenantId: str, SessionId: str ) -> Dict[str, Any]:
         
         self.redis_service.validate_tenant_session(TenantId, SessionId)
         
-        # Step 1: Store user query
         self.redis_service.store_message(
             TenantId=TenantId,
             SessionId=SessionId,
@@ -84,52 +74,49 @@ class SearchService:
             content=query,
             metadata={"source": "database_search"}
         )
-        
-        # Step 2: Generate SQL with tenant filter
-        print("[STEP 1] Generating SQL Query with tenant filter...")
+
+        logger.info(" Generating SQL Query with tenant filter...")
         try:
-            sql_result = self.sql_generator.generate_sql(query, TenantId=TenantId)
+            sql_result = self.sql_generator.generate_sql(query, TenantId=TenantId, SessionId=SessionId)
             sql = sql_result.get("sql")
-        except Exception as e:
+        except Exception:
+            logger.error("Error generating SQL query", exc_info=True)
             return {
                 "ok": False,
                 "error_type": "SQL_GENERATION_FAILED",
                 "user_message":(
                     "Failed to generate database query."
                     "Please try again with accurate prompt."
-                )
-            
+                )       
             }
         
         if not sql or TenantId not in sql:
+            logger.error("Generated SQL query is invalid or missing tenant filter")
             return {
                 "ok": False,
                 "error_type": "SQL_GENERATION_FAILED",
                 "user_message":(
                     "Failed to generate database query."
                     "Please try again with accurate prompt."
-                )
-            
+                )       
             }
         
-        # Step 3: Execute SQL
-        print("[STEP 2] Executing on PostgreSQL...")
+        logger.info(" Executing on PostgreSQL...")
         try:
             rows = self.db_service.execute_query(sql)
             count = len(rows)
-            print(f"[RESULT] Retrieved {count} rows for tenant:{TenantId}")
+            logger.info(f"[RESULT] Retrieved {count} rows for tenant:{TenantId}")
         except Exception as e:
+            logger.error(f"Error executing SQL query: {e}")
             return {
                 "ok": False,
                 "error_type": "DB_EXECUTION_FAILED",
                 "user_message":(
-                    "Failed to generate database query."
+                    "Failed to execute database query."
                     "Please try again with accurate prompt."
                 )
             }
 
-        
-        # Step 4: Store results as system message (ONLY DATA)
         system_index = self.redis_service.store_message(
             TenantId=TenantId,
             SessionId=SessionId,
@@ -150,13 +137,11 @@ class SearchService:
         }
     
     
-    def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str = "general_qa") -> Dict[str, Any]:
+    def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str) -> Dict[str, Any]:
 
         self.redis_service.validate_tenant_session(TenantId, SessionId)
 
         try:
-            
-            # 1️⃣ Store user query
             self.redis_service.store_message(
                 TenantId=TenantId,
                 SessionId=SessionId,
@@ -165,22 +150,18 @@ class SearchService:
                 metadata={"intent": intent, "source": "ai_chat"}
             )
 
-            # 2️⃣ Get context
             system_data, _ = self.redis_service.get_context_for_ai(
                 TenantId, SessionId
             )
+            logger.info(f"[AI MODE] Processing with {len(system_data)} stored rows")
 
-            
 
-            print(f"[AI MODE] Processing with {len(system_data)} stored rows")
-
-            # =====================================================
-            # 🟢 SUMMARY
-            # =====================================================
             if intent == "summary":
-                analysis = self.gemini_service.generate_summary(
+                analysis = self.summary_service.generate_summary(
                     user_query=query,
-                    rows=system_data[:self.MAX_ROWS]
+                    rows=system_data,
+                    TenantId=TenantId,
+                    SessionId=SessionId
                 )
 
                 index = self.redis_service.store_message(
@@ -199,19 +180,16 @@ class SearchService:
                     "chart":None
                 }
 
-            # =====================================================
-            # 🟢 FORECAST (TEXT + SVG CHART)
-            # =====================================================
             elif intent == "forecast":
-                forecast_result = self.gemini_service.generate_forecast(
+                forecast_result = self.forecast_service.generate_forecast(
                     user_query=query,
-                    rows=system_data[:self.MAX_ROWS]
-                    
+                    rows=system_data,
+                    TenantId=TenantId,
+                    SessionId=SessionId   
                 )
                 
                 forecast_text= forecast_result["text"]
                 forecast_rows = forecast_result["forecast_rows"]
-
 
                 forecast_index = self.redis_service.store_message(
                     TenantId=TenantId,
@@ -220,17 +198,16 @@ class SearchService:
                     content=forecast_text,
                     metadata={"intent": "forecast", "type": "text"}
                 )
-                
-                
 
-                chart = self.gemini_service.generate_forecast_chart(
+                chart = self.forecast_service.generate_forecast_chart(
                     user_query= query,
-                    forecast_rows= forecast_rows
+                    forecast_rows= forecast_rows,
+                    TenantId=TenantId,
+                    SessionId=SessionId
                 )
 
                 chart_index = None
                 if chart and not chart.get("error"):
-                    import base64
                     svg = base64.b64decode(chart["image_b64"]).decode("utf-8")
 
                     chart_index = self.redis_service.store_message(
@@ -253,25 +230,21 @@ class SearchService:
                     "chart":{
                         "svg":svg,
                         "index":chart_index
-                    } if chart_index else None
-                     
+                    } if chart_index else None               
                 }
-
-            # =====================================================
-            # 🟢 CHART ONLY (SVG)
-            # =====================================================
-            
+               
             elif intent == "chart":
-                chart = self.gemini_service.generate_chart(
-                    query,
-                    system_data[:self.MAX_ROWS]
+                chart = self.chart_service.generate_chart(
+                    user_query=query,
+                    rows=system_data,
+                    TenantId=TenantId,
+                    SessionId=SessionId
                 )
 
                 if not chart or chart.get("error"):
-                    content = "❌ Failed to generate chart"
+                    content = "Failed to generate chart"
                     metadata = {"intent": "chart", "error": True}
                 else:
-                    import base64
                     content = base64.b64decode(chart["image_b64"]).decode("utf-8")
                     metadata = {
                         "intent": "chart",
@@ -287,7 +260,6 @@ class SearchService:
                     metadata=metadata
                 )
 
-                # ✅ IMPORTANT: return SVG as content
                 return {
                     "analysis_text": None,
                     "chart":{
@@ -296,14 +268,13 @@ class SearchService:
                     }
                 }
 
-            # =====================================================
-            # 🟢 GENERAL QA
-            # =====================================================
             else:
-                analysis = self.gemini_service.generate_general_qa(
+                analysis = self.QA_service.generate_general_qa(
                     user_query=query,
-                    rows= system_data[:self.MAX_ROWS]
-                    )
+                    rows= system_data,
+                    TenantId=TenantId,
+                    SessionId=SessionId
+                )
 
                 index = self.redis_service.store_message(
                     TenantId=TenantId,
@@ -322,7 +293,7 @@ class SearchService:
                 }
 
         except Exception as e:
-            print(f"[AI MODE] ❌ Error: {e}")
+            logger.error(f"[AI MODE]  Error: {e}")
             traceback.print_exc()
 
             index = self.redis_service.store_message(
@@ -345,16 +316,11 @@ class SearchService:
                 
             }
 
-
-
-    # ===============================================================
-    # UNIFIED SEARCH (MAIN ORCHESTRATOR)
-    # ===============================================================
     
-    def unified_search(self, req) -> Any:
-       
+    def unified_search(self, req: UnifiedSearchRequest, session_id: str) -> Any:
+
         try:
-            # Validate Gemini availability
+
             if not self.use_gemini:
                 return MessageResponseWrapper(
                     success=False,
@@ -367,25 +333,20 @@ class SearchService:
                     }
                 )
             
-            
-            
-            TenantId = (req.TenantId or "").strip()
+            TenantId = self.tenant_id
             query = (req.query or "").strip()
             
             if not query:
                 raise HTTPException(status_code=400, detail="Query cannot be empty")
             
-            # self._log_unified_start(TenantId, req.SessionId, query)
-            
-            # ===== HANDLE REFRESH REQUESTS =====
             if is_refresh_request(query):
-                print("[REFRESH] User requested fresh data (YES/OK detected).")
+                logger.info("[REFRESH] User requested fresh data (YES/OK detected).")
                 
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id) 
                 last_user_query = get_last_real_user_query(all_messages)
                 
                 if not last_user_query:
-                    print("[REFRESH] No previous user query found to refresh.")
+                    logger.info("[REFRESH] No previous user query found to refresh.")
                     return MessageResponseWrapper(
                         success=True,
                         code=200,
@@ -394,32 +355,28 @@ class SearchService:
                             "response_type": "message",
                             "response_message": (
                                 "I couldn't find a previous invoice query to refresh. "
-                                "Please ask something like 'pending invoices' or "
-                                "'approved invoices for last month' first."
+                                "Please ask me a question about your invoices to get started!"
                             ),
                         },
                     )
                 
-                # Extract additional context from current query
                 additional_context = extract_additional_context(query)
-                
-                # Combine last query with new context
+
                 if additional_context:
                     combined_query = f"{last_user_query} {additional_context}"
-                    print(f"[REFRESH] Last query: {last_user_query!r}")
-                    print(f"[REFRESH] Additional context: {additional_context!r}")
-                    print(f"[REFRESH] Combined query: {combined_query!r}")
+                    logger.info(f"[REFRESH] Last query: {last_user_query!r}")
+                    logger.info(f"[REFRESH] Additional context: {additional_context!r}")
+                    logger.info(f"[REFRESH] Combined query: {combined_query!r}")
                 else:
                     combined_query = last_user_query
-                    print(f"[REFRESH] No additional context, using: {combined_query!r}")
+                    logger.info(f"[REFRESH] No additional context, using: {combined_query!r}")
                 
-                # Direct DATABASE search with combined query
                 result = self.search(
                     query=combined_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,
                 )
-                
+                   
                 if result.get("error_type"):
                     return MessageResponseWrapper(
                         success=False,
@@ -436,10 +393,7 @@ class SearchService:
                 count = result["count"]
                 index = result["index"]
                 
-                print(f"[RESULT] Retrieved {count} rows, stored at index {index}")
-                
-                
-
+                logger.info(f"[RESULT] Retrieved {count} rows, stored at index {index}")
                 
                 if not rows:
                     return DatabaseResponseWrapper(
@@ -474,13 +428,12 @@ class SearchService:
                     },
                 )
             
-            # ===== STEP 1: INTELLIGENT ROUTING =====
-            print("[STEP 1] Analyzing query for intelligent routing...")
+            logger.info("Analyzing query for intelligent routing...")
             
-            routing_decision = self.router.intelligent_route(query, TenantId, req.SessionId)
+            routing_decision = self.router.intelligent_route(query, TenantId, session_id)
             if routing_decision.get("router_error"):
                 error_detail = routing_decision.get("router_error_detail")
-                print(f"[ROUTER] ❌ Router failure: {error_detail}")
+                logger.error(f"[ROUTER]  Router failure: {error_detail}")
 
                 return MessageResponseWrapper(
                     success=False,
@@ -498,10 +451,9 @@ class SearchService:
             mode = routing_decision["mode"]
             reasoning = routing_decision["reasoning"]
             
-            print(f"[ROUTER] 🎯 Decision: {mode.upper()}")
-            print(f"[ROUTER] 📝 Reasoning: {reasoning}")
-            
-            # ===== HANDLE GREETINGS / NON-INVOICE QUERIES =====
+            logger.info(f"[ROUTER] Decision: {mode.upper()}")
+            logger.info(f"[ROUTER] Reasoning: {reasoning}")
+
             if mode == "message":
                 return MessageResponseWrapper(
                     success=True,
@@ -515,17 +467,16 @@ class SearchService:
                         )
                     }
                 )
-            
-            # ===== DATABASE MODE =====
+
             elif mode == "database":
-                print("[STEP 2] Executing DATABASE search...")
+                logger.info(" Executing DATABASE search...")
                 
                 refined_query = routing_decision.get("refined_query", query)
                 
                 result = self.search(
                     query=refined_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId
+                    SessionId=session_id
                 )
                 
                 if result.get("error_type"):
@@ -544,10 +495,8 @@ class SearchService:
                 count = result["count"]
                 index = result["index"]
                 
-                print(f"[RESULT] Retrieved {count} rows, stored at index {index}")
+                logger.info(f"[RESULT] Retrieved {count} rows, stored at index {index}")
                 
-                
-
                 if not rows:
                     return DatabaseResponseWrapper(
                         success=True,
@@ -580,21 +529,18 @@ class SearchService:
                         "index": index
                     }
                 )
-            
-            # ===== AI_CACHED MODE (Summarize/Forecast/Chart without date) =====
+
             elif mode == "ai_cached":
-                print("[STEP 2] Executing AI_CACHED mode (checking cache for AI task)...")
+                logger.info("Executing AI_CACHED mode (checking cache for AI task)...")
                 
-                # Check if data exists in cache
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages
                 )
                 
                 if not has_cached_data:
-                    # NO CACHE - Ask user to fetch data first
-                    print("[CACHE] No cached data found - asking user to fetch")
+                    logger.info("[CACHE] No cached data found - asking user to fetch")
                     
                     return MessageResponseWrapper(
                         success=True,
@@ -610,17 +556,16 @@ class SearchService:
                         }
                     )
                 
-                # CACHE EXISTS - Perform AI analysis
-                print(f"[CACHE] Found cached data - performing AI analysis")
+                logger.info("[CACHE] Found cached data - performing AI analysis")
                 
                 refined_query = routing_decision.get("refined_query", query)
                 intent = routing_decision.get("intent", "general_qa")
                 
-                print(f"[AI] Intent: {intent}")
+                logger.info(f"[AI] Intent: {intent}")
                 
                 result = self.process_model_query(
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,
                     query=refined_query,
                     intent=intent
                 )
@@ -643,7 +588,7 @@ class SearchService:
                 summary_index = summary["index"] if summary else None
                 chart_index = chart["index"] if chart else None
                 
-                print(
+                logger.info(
                     f"[RESULT] AI response generated from cache "
                     f"(summary_index={summary_index}, chart_index={chart_index})"
                 )
@@ -660,20 +605,17 @@ class SearchService:
 
                 )
             
-            # ===== FILTER_CACHED MODE (Pending/Verified/Expired without date) =====
             elif mode == "filter_cached":
-                print("[STEP 2] Executing FILTER_CACHED mode (using last system data)...")
+                logger.info("Executing FILTER_CACHED mode (using last system data)...")
                 
-                # Check if data exists in cache
-                all_messages = self.redis_service.get_all_messages(TenantId, req.SessionId)
+                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages
                 )
                 
                 if not has_cached_data:
-                    # NO CACHE - Ask user to fetch data first
-                    print("[CACHE] ❌ No cached data found - asking user to fetch")
+                    logger.info("[CACHE] ❌ No cached data found - asking user to fetch")
                     
                     return MessageResponseWrapper(
                         success=True,
@@ -688,18 +630,17 @@ class SearchService:
                             )
                         }
                     )
-                
-                # CACHE EXISTS - Perform analysis on cached data
-                print(f"[CACHE] Using last retrieved data for analysis")
+                    
+                logger.info("[CACHE] Using last retrieved data for analysis")
                 
                 refined_query = routing_decision.get("refined_query", query)
                 intent = routing_decision.get("intent", "general_qa")
                 
-                print(f"[AI] Intent: {intent}")
+                logger.info(f"[AI] Intent: {intent}")
                 
                 result = self.process_model_query(
                     TenantId=TenantId,
-                    SessionId=req.SessionId,
+                    SessionId=session_id,
                     query=refined_query,
                     intent=intent
                 )
@@ -718,11 +659,7 @@ class SearchService:
                 
                 summary = result.get("analysis_text")
                 chart = result.get("chart")
-
                 
-
-                
-                # Add footer indicating data source and offer refresh
                 footer_message = (
                     "\n\n"
                     "ℹ️ *Results based on last retrieved data. "
@@ -736,17 +673,14 @@ class SearchService:
                         "index": summary["index"]
                 }
                 
-                
-                
                 summary_index = summary["index"] if summary else None
                 chart_index = chart["index"] if chart else None
 
-                print(
+                logger.info(
                     f"[RESULT] AI response generated from last cache "
                     f"(summary_index={summary_index}, chart_index={chart_index})"
                 )
 
-                
                 return ChatResponseWrapper(
                     success=True,
                     code=200,
@@ -759,19 +693,17 @@ class SearchService:
 
                 )
             
-            # ===== HYBRID MODE (Database + AI) - RETURN BOTH =====
             elif mode == "hybrid":
-                print("[STEP 2] Executing HYBRID mode (Database → AI, returning BOTH)...")
-                
-                # Step 2a: Fetch fresh data from database
+                logger.info("Executing HYBRID mode (Database → AI, returning BOTH)...")
+
                 db_query = routing_decision.get("database_query", query)
                 
-                print(f"[HYBRID-DB] Fetching fresh data with: {db_query}")
+                logger.info(f"[HYBRID-DB] Fetching fresh data with: {db_query}")
                 
                 db_result = self.search(
                     query=db_query,
                     TenantId=TenantId,
-                    SessionId=req.SessionId
+                    SessionId=session_id
                 )
                 
                 if db_result.get("error_type"):
@@ -790,9 +722,8 @@ class SearchService:
                 count = db_result["count"]
                 db_index = db_result["index"]
                 
-                print(f"[HYBRID-DB] ✅ Retrieved {count} rows")
-                
-                                
+                logger.info(f"[HYBRID-DB] Retrieved {count} rows")
+                             
                 if not rows:
                     return DatabaseResponseWrapper(
                         success=True,
@@ -806,37 +737,27 @@ class SearchService:
                             "index": db_index
                         }
                     )
-                
-                # Prepare database response data
+
                 columns = list(rows[0].keys())
                 ui_rows = [
                     safe_serialize({col: row.get(col) for col in columns})
                     for row in rows[:self.MAX_UI_ROWS]
                 ]
                 
-                # Step 2b: Perform AI analysis on the fresh data
                 ai_query = routing_decision.get("ai_query", query)
                 intent = routing_decision.get("intent", "general_qa")
                 
-                print(f"[HYBRID-AI] Analyzing with intent: {intent}")
-                
-                
-                                
-                
+                logger.info(f"[HYBRID-AI] Analyzing with intent: {intent}")
                 
                 ai_result = self.process_model_query(
                         TenantId=TenantId,
-                        SessionId=req.SessionId,
+                        SessionId=session_id,
                         query=ai_query,
                         intent=intent
                     )
                     
-                    
-                    
-                
-                    
-                
                 if ai_result.get("error_type"):
+                    logger.warning(f"[HYBRID-AI] AI processing failed: {ai_result['error_type']}")
                     return HybridResponseWrapper(
                         success=True,
                         code=200,
@@ -860,14 +781,12 @@ class SearchService:
                 summary = ai_result.get("analysis_text")
                 chart = ai_result.get("chart")
 
-                print(
+                logger.info(
                     f"[HYBRID] AI artifacts "
                     f"(summary_index={summary['index'] if summary else None}, "
                     f"chart_index={chart['index'] if chart else None})"
                 )
-
                 
-                # Return HYBRID response with BOTH database and AI data
                 return HybridResponseWrapper(
                     success=True,
                     code=200,
@@ -887,8 +806,7 @@ class SearchService:
                         },
                     },
                 )
-            
-            # Fallback
+
             raise HTTPException(
                 status_code=500,
                 detail=f"Unknown routing mode: {mode}"
@@ -897,11 +815,20 @@ class SearchService:
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[API] Unified search failed: {e}")
-            traceback.print_exc()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Service temporarily unavailable. Please try again later."
+            logger.error(f"[API] Unified search failed: {e}", exc_info=True)
+
+            return MessageResponseWrapper(
+                success=False,
+                code=500,
+                message="Service temporarily unavailable",
+                errors=["UNIFIED_SEARCH_FAILED"],
+                data={
+                    "response_type": "message",
+                    "response_message": (
+                        "Something went wrong while processing your request. "
+                        "Please try again in a few moments."
+                    )
+                }
             )
-    
+
     
