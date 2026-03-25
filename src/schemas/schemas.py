@@ -120,5 +120,55 @@ class ComparisonFileData(BaseModel):
 
 class ComparisonResponse(BaseResponse):
     data: Optional[ComparisonFileData] = None
-    
-    
+
+
+class ModelConfigUpsertRequest(BaseModel):
+    Purpose: str = Field(..., max_length=100)
+    Provider: str = Field(..., max_length=100)
+    ModelName: str = Field(..., max_length=100)
+    ApiKey: str = Field(..., min_length=1)
+    Temperature: float
+    TopP: float
+    TopK: int
+    MaxOutputTokens: int
+
+
+class ModelConfigData(BaseModel):
+    Id: int
+    TenantId: str
+    Purpose: str
+    Provider: str
+    ModelName: str
+    ApiKey: str
+    Temperature: float
+    TopP: float
+    TopK: int
+    MaxOutputTokens: int
+    CreatedAt: Optional[str] = None
+    UpdatedAt: Optional[str] = None
+
+
+class ModelConfigResponse(BaseResponse):
+    data: Optional[ModelConfigData] = None
+
+
+class ModelConfigListResponse(BaseResponse):
+    data: List[ModelConfigData] = Field(default_factory=list)
+
+
+class ModelConfigDeleteData(BaseModel):
+    Id: int
+
+
+class ModelConfigDeleteResponse(BaseResponse):
+    data: Optional[ModelConfigDeleteData] = None
+
+
+class ModelConfigOptionsData(BaseModel):
+    purposes: List[str] = Field(default_factory=list)
+    providers: List[str] = Field(default_factory=list)
+    models_by_provider: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class ModelConfigOptionsResponse(BaseResponse):
+    data: ModelConfigOptionsData

@@ -44,8 +44,7 @@ class SummaryService:
 
         try:
             spec = get_summary_spec()
-            logger.info(f"[SUMMARY][tenant={TenantId}] Spec: {len(spec.get('aggregations', []))} categories — {spec.get('include_categories', [])}")
-
+            
             aggregated_summary = aggregate_for_summary(
                 rows=rows,
                 spec=spec,
@@ -61,6 +60,7 @@ class SummaryService:
             summary_json = json.dumps(aggregated_summary, indent=2)
             data_block = f"AGGREGATED SUMMARY DATA (JSON):\n```json\n{summary_json}\n```"
             logger.info(f"[SUMMARY][tenant={TenantId}] Data formatted ({len(summary_json)} chars vs {len(str(rows))} original).")
+            logger.info(f"summary: {summary_json}")
 
             date_info = ""
             time_agg = aggregated_summary.get("aggregations", {}).get("time", {})

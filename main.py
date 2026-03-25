@@ -6,6 +6,7 @@ from src.routers.export_router import router as export_router
 from src.routers.comparison_router import router as comparison_router
 from src.routers.session_router import router as session_router
 from src.routers.health_router import router as health_router
+from src.routers.model_config_router import router as model_config_router
 import logging
 import sys
 import asyncio
@@ -62,6 +63,7 @@ app.include_router(export_router)
 app.include_router(comparison_router)
 app.include_router(health_router)
 app.include_router(fetch_router)
+app.include_router(model_config_router)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS "data"."ModelDefinition" (
+    "Id" SERIAL PRIMARY KEY,
+    "ProviderName" VARCHAR(100) NOT NULL,
+    "ModelName" VARCHAR(100) NOT NULL,
+    "IsActive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "SortOrder" INTEGER NOT NULL DEFAULT 0,
+    "CreatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "UpdatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "UQ_ModelDefinition_Provider_ModelName" UNIQUE ("ProviderName", "ModelName")
+);

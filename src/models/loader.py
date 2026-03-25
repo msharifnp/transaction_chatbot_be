@@ -1,4 +1,3 @@
-from typing import Any
 from src.models.config import ModelConfig
 from src.models.factory import ModelProviderFactory
 from src.models.registry import ModelRegistry
@@ -45,7 +44,7 @@ class ModelLoader:
                 logger.info(f"   TopP: {row.get('TopP')}")
                 logger.info(f"   TopK: {row.get('TopK')}")
                 logger.info(f"   MaxTokens: {row.get('MaxOutputTokens')}")
-                logger.info(f"   API Key: {row['ApiKey'][:10]}..." if row['ApiKey'] else "  └─ API Key: None")
+                logger.info(f"   API Key: {row['ApiKey'][:10]}..." if row['ApiKey'] else "   API Key: None")
                 
                 config = ModelConfig(
                     provider=provider,

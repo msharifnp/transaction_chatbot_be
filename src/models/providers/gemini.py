@@ -14,7 +14,7 @@ class GeminiProvider(BaseModelProvider):
         try:    
             self.client = genai.Client(api_key=self.config.api_key)
             self.enabled = True
-            logger.info(f"[GEMINI]  Initialized - Model: {self.config.model_name}")    
+            logger.info(f"[GEMINI]  Initialized - Model: {self.config.model_name}")
         except Exception as e:
             logger.error(f"[GEMINI]  Initialization failed: {e}")
             self.enabled = False
@@ -22,7 +22,7 @@ class GeminiProvider(BaseModelProvider):
     def generate_text(self, prompt: str, **kwargs) -> str:
         if not self.is_available():
             raise RuntimeError("Gemini not available")
-        
+
         response = self.client.models.generate_content(
             model=self.config.model_name,
             contents=prompt,
