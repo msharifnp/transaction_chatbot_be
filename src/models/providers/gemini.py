@@ -1,3 +1,5 @@
+from typing import Any
+
 from src.models.base import BaseModelProvider
 from google import genai
 import logging
@@ -19,7 +21,7 @@ class GeminiProvider(BaseModelProvider):
             logger.error(f"[GEMINI]  Initialization failed: {e}")
             self.enabled = False
     
-    def generate_text(self, prompt: str, **kwargs) -> str:
+    def generate_text(self, prompt: str, **kwargs) -> Any:
         if not self.is_available():
             raise RuntimeError("Gemini not available")
 
@@ -41,4 +43,24 @@ class GeminiProvider(BaseModelProvider):
             },
         )
         
-        return getattr(response, "text", "") or ""
+        text = getattr(response, "text", "") or ""
+
+        usage_metadata = getattr(response, "usage_metadata", None)
+
+        if usage_metadata:
+            usage = {
+                "prompt_tokens": getattr(usage_metadata, "prompt_token_count", None),
+                "completion_tokens": getattr(usage_metadata, "candidates_token_count", None),
+                "total_tokens": getattr(usage_metadata, "total_token_count", None),
+                "cached_tokens": getattr(usage_metadata, "cached_content_token_count", 0) or 0,
+                "thoughts_tokens": getattr(usage_metadata, "thoughts_token_count", None),
+            }
+        else:
+            usage = {
+                "cached_tokens": 0,
+            }
+
+        return {
+            "text": text,
+            "usage": usage,
+        }

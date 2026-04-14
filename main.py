@@ -7,21 +7,28 @@ from src.routers.comparison_router import router as comparison_router
 from src.routers.session_router import router as session_router
 from src.routers.health_router import router as health_router
 from src.routers.model_config_router import router as model_config_router
+from src.routers.token_consumption_router import router as token_consumption_router
+from src.routers.voice_router import router as voice_router
 import logging
 import sys
 import asyncio
+from pathlib import Path
 from src.routers.fetch_router import router as fetch_router
 from src.lifecycle.startup import handle_startup
 from src.lifecycle.cleanup import smart_cleanup_daemon
 from src.lifecycle.shutdown import handle_shutdown
 from src.middleware.tenant_middleware import handle_tenant_middleware
+from src.utils.utils import get_date_file_handler
+
+
+LOGS_DIR = Path(__file__).resolve().parent / "logs"
 
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler("app.log"),
+        get_date_file_handler(LOGS_DIR, encoding="utf-8"),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -64,6 +71,8 @@ app.include_router(comparison_router)
 app.include_router(health_router)
 app.include_router(fetch_router)
 app.include_router(model_config_router)
+app.include_router(token_consumption_router)
+app.include_router(voice_router)
 
 
 if __name__ == "__main__":

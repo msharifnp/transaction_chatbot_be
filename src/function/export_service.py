@@ -334,15 +334,17 @@ class ExportService:
             raise ValueError(f"Failed to convert SVG to PNG: {str(e)}")
     
             
-    def export_pdf_handler(self, TenantId: str, SessionId: str, req: ExportPdfRequest) -> StreamingResponse:
+    def export_pdf_handler(self, TenantId: str, UserId: str, SessionId: str, req: ExportPdfRequest) -> StreamingResponse:
         
         self.redis_service.validate_tenant_session(
             TenantId,
+            UserId,
             SessionId
         )
 
         msg = self.redis_service.get_data_by_index(
             TenantId=TenantId,
+            UserId=UserId,
             SessionId=SessionId,
             index=req.index
         )
@@ -379,15 +381,17 @@ class ExportService:
             }
         )
 
-    def export_word_handler(self, TenantId: str, SessionId: str,req: ExportWordRequest)-> StreamingResponse:
+    def export_word_handler(self, TenantId: str, UserId: str, SessionId: str,req: ExportWordRequest)-> StreamingResponse:
         
         self.redis_service.validate_tenant_session(
             TenantId,
+            UserId,
             SessionId
         )
         
         msg = self.redis_service.get_data_by_index(
             TenantId=TenantId,
+            UserId=UserId,
             SessionId=SessionId,
             index=req.index
         )
@@ -425,12 +429,13 @@ class ExportService:
         )
 
     
-    def export_excel_handler(self, TenantId: str, SessionId: str, req: ExportExcelRequest) -> StreamingResponse:
+    def export_excel_handler(self, TenantId: str, UserId: str, SessionId: str, req: ExportExcelRequest) -> StreamingResponse:
         
-        self.redis_service.validate_tenant_session(TenantId, SessionId)
+        self.redis_service.validate_tenant_session(TenantId, UserId, SessionId)
         
         msg = self.redis_service.get_data_by_index(
             TenantId=TenantId,
+            UserId=UserId,
             SessionId=SessionId,
             index=req.index
         )
@@ -484,12 +489,13 @@ class ExportService:
         )
     
     
-    def export_png_handler(self, TenantId: str, SessionId: str, req: ExportPngRequest) -> StreamingResponse:
+    def export_png_handler(self, TenantId: str, UserId: str, SessionId: str, req: ExportPngRequest) -> StreamingResponse:
         
-        self.redis_service.validate_tenant_session(TenantId, SessionId)
+        self.redis_service.validate_tenant_session(TenantId, UserId, SessionId)
         
         msg = self.redis_service.get_data_by_index(
             TenantId=TenantId,
+            UserId=UserId,
             SessionId=SessionId,
             index=req.index
         )

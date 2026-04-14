@@ -21,9 +21,10 @@ BASE_DIR = Path(r"D:\Python_Project\exports\comparisons")
 
 class ComparisonService:
 
-    def __init__(self, TenantId: str = None):
+    def __init__(self, TenantId: str = None, UserId: str = None):
         
         self.TenantId = TenantId
+        self.UserId = UserId
         self.db_config = DatabaseConfig.get_database_config()
         self.redis_config = RedisConfig.get_redis_config()
         self.db_service = DatabaseService(self.db_config)
@@ -93,6 +94,7 @@ class ComparisonService:
                 previous_month_invoice = previous,
                 last_6_months = last_6_months,
                 TenantId = self.TenantId,
+                UserId = self.UserId,
                 SessionId = f"{req.AccountNumber}_{datetime.now().isoformat()}"
             )
             
@@ -265,8 +267,9 @@ class ComparisonService:
             "FilePath",
             "FileSize",
             "FileType",
+            "DownloadCount",
             "ExpiresAt"
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING "FileId", "CreatedAt"
         """
         
@@ -279,6 +282,7 @@ class ComparisonService:
                 file_path,  
                 file_size,
                 "comparison_report",
+                0,
                 expires_at
             )
         )
@@ -305,6 +309,8 @@ class ComparisonService:
             "FileName",
             "FilePath",
             "FileSize",
+            "DownloadCount",
+            "LastDownloadedAt",
             "ExpiresAt",
             "IsDeleted"
         FROM "data"."GeneratedFiles"
@@ -366,7 +372,7 @@ class ComparisonService:
         
         if not full_path.exists():
             logger.warning(f"[DOWNLOAD]  File not found on disk: {full_path}")
-            self.db_service.execute_update(
+            self.db_service.execute_query(
                 'UPDATE "data"."GeneratedFiles" SET "IsDeleted" = TRUE WHERE "FileId" = %s',
                 (file_id,)
             )
@@ -389,18 +395,28 @@ class ComparisonService:
                 detail="Only PDF files can be downloaded"
             )
         
-        affected_rows = self.db_service.execute_update(
+        download_stats = self.db_service.execute_query(
             """
             UPDATE "data"."GeneratedFiles" 
-            SET "DownloadCount" = "DownloadCount" + 1,
+            SET "DownloadCount" = COALESCE("DownloadCount", 0) + 1,
                 "LastDownloadedAt" = NOW()
             WHERE "FileId" = %s
+              AND "TenantId" = %s
+            RETURNING "DownloadCount", "LastDownloadedAt"
             """,
-            (file_id,)
+            (file_id, tenant_id)
         )
         
         logger.info(f"[DOWNLOAD]  File validated: FileId={file_id}, Path={full_path}")
-        logger.info(f"[DOWNLOAD] Updated download stats (affected {affected_rows} rows)")
+        if download_stats:
+            logger.info(
+                "[DOWNLOAD] Updated download stats: FileId=%s, DownloadCount=%s, LastDownloadedAt=%s",
+                file_id,
+                download_stats[0]["DownloadCount"],
+                download_stats[0]["LastDownloadedAt"],
+            )
+        else:
+            logger.warning("[DOWNLOAD] Download stats were not updated for FileId=%s", file_id)
         
         return {
             "file_path": str(full_path),

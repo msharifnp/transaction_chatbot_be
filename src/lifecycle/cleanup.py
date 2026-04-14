@@ -28,14 +28,15 @@ async def smart_cleanup_daemon():
 
             for tenant_id in tenants:
                 sessions = redis.get_session_keys(tenant_id)
-                for session_id in sessions:
-                    last = redis.get_session_last_activity(tenant_id, session_id)
+                for user_id, session_id in sessions:
+                    last = redis.get_session_last_activity(tenant_id, user_id, session_id)
                     if last and (current_time - last > SESSION_IDLE_TIMEOUT):
-                        redis.delete_session(tenant_id, session_id)
+                        redis.delete_session(tenant_id, user_id, session_id)
                         logger.info(
-                            "Removed idle session %s (tenant=%s)",
+                            "Removed idle session %s (tenant=%s user=%s)",
                             session_id,
                             tenant_id,
+                            user_id,
                         )
 
                 last_activity = redis.get_tenant_last_activity(tenant_id)

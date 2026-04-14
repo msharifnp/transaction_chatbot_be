@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class QueryRouter:
 
-    PURPOSE = "Summary" 
+    PURPOSE = "Summary"
 
     def __init__(self, model_service: ModelService):
         self.model_service = model_service
@@ -19,16 +19,32 @@ class QueryRouter:
         if not self.enabled:
             logger.warning(f"[ROUTER] Purpose '{self.PURPOSE}' is not enabled in model service.")
 
-    def _safe_generate(self, prompt: str, tenant_id: str, session_id: str) -> str:
-        text = self.model_service.generate(self.PURPOSE, prompt)
+    def _safe_generate(self, prompt: str, TenantId: str, UserId: str, SessionId: str) -> str:
+        text, usage = self.model_service.generate_with_usage(
+            self.PURPOSE,
+            prompt,
+            usage_context={
+                "TenantId": TenantId,
+                "UserId": UserId,
+                "SessionId": SessionId,
+            },
+        )
+        logger.info(
+            f"[tenant={TenantId}][session={SessionId}] "
+            f"Tokens -> Prompt: {usage.get('prompt_tokens')}, "
+            f"Completion: {usage.get('completion_tokens')}, "
+            f"Thoughts: {usage.get('thoughts_tokens')}, "
+            f"Cache: {usage.get('cache_tokens')}, "
+            f"total: {usage.get('total_tokens')}"
+        )
         if not text or not text.strip():
-            raise ValueError(f"[tenant={tenant_id}] Empty response received from model.")
+            raise ValueError(f"[tenant={TenantId}, session={SessionId}] Empty response received from model.")
         return text
 
-    def intelligent_route(self, user_query: str, tenant_id: str, session_id: str) -> Dict:
+    def intelligent_route(self, user_query: str, tenant_id: str, user_id: str, session_id: str) -> Dict:
 
         if not self.enabled:
-            logger.warning(f"[ROUTER][tenant={tenant_id}] Routing skipped — purpose not enabled.")
+            logger.warning(f"[ROUTER][tenant={tenant_id}] Routing skipped - purpose not enabled.")
             return {
                 "mode": "message",
                 "message": "Query routing is currently unavailable.",
@@ -41,7 +57,7 @@ class QueryRouter:
 
         try:
             text = retry_with_backoff(
-                lambda: self._safe_generate(prompt, tenant_id, session_id),
+                lambda: self._safe_generate(prompt, tenant_id, user_id, session_id),
                 max_retries=3,
                 initial_delay=1,
             )
@@ -51,7 +67,7 @@ class QueryRouter:
 
             mode = result.get("mode")
             if not mode:
-                logger.warning(f"[ROUTER][tenant={tenant_id}] Model response missing 'mode' key — defaulting to 'message'.")
+                logger.warning(f"[ROUTER][tenant={tenant_id}] Model response missing 'mode' key - defaulting to 'message'.")
                 mode = "message"
                 result["mode"] = mode
 

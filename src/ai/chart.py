@@ -21,17 +21,34 @@ class ChartService:
         self.model_service = model_service
         self.enabled = model_service.has_purpose(self.PURPOSE)
 
-    def _safe_generate(self, prompt: str, TenantId: str, SessionId: str) -> str:
-        text = self.model_service.generate(self.PURPOSE, prompt)
+    def _safe_generate(self, prompt: str, TenantId: str, UserId: str, SessionId: str) -> str:
+        text, usage = self.model_service.generate_with_usage(
+            self.PURPOSE,
+            prompt,
+            usage_context={
+                "TenantId": TenantId,
+                "UserId": UserId,
+                "SessionId": SessionId,
+            },
+        )
+        logger.info(
+            f"[tenant={TenantId}][session={SessionId}] "
+            f"Tokens -> Prompt: {usage.get('prompt_tokens')}, "
+            f"Completion: {usage.get('completion_tokens')}, "
+            f"Thoughts: {usage.get('thoughts_tokens')}, "
+            f"Cache: {usage.get('cache_tokens')}, "
+            f"total: {usage.get('total_tokens')}"
+        )
         if not text or not text.strip():
-            raise ValueError(f"[tenant={TenantId}][session={SessionId}] Empty response received from model.")
-        return text.strip()
+            raise ValueError(f"[tenant={TenantId}, session={SessionId}] Empty response received from model.")
+        return text
 
     def generate_chart(
         self,
         user_query: str,
         rows: List[Dict],
         TenantId: str,
+        UserId: str,
         SessionId: str,
         size: str = "960x560",
     ) -> Optional[Dict]:
@@ -55,6 +72,7 @@ class ChartService:
                 field_types=FIELD_TYPES,
                 sample_rows=rows[:1],
                 TenantId=TenantId,
+                UserId=UserId,
                 SessionId=SessionId,
                 chart_hint=None,
             )
@@ -77,7 +95,7 @@ class ChartService:
             )
 
             raw = retry_with_backoff(
-                lambda: self._safe_generate(prompt, TenantId, SessionId),
+                lambda: self._safe_generate(prompt, TenantId, UserId, SessionId),
                 max_retries=3,
                 initial_delay=2,
             )

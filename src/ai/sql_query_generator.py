@@ -19,13 +19,29 @@ class SQLQueryGenerator:
         self.model_service = model_service
         self.enabled = model_service.has_purpose(self.PURPOSE)
 
-    def _safe_generate(self, prompt: str, TenantId: str, SessionId: str) -> str:
-        text = self.model_service.generate(self.PURPOSE, prompt)
+    def _safe_generate(self, prompt: str, TenantId: str, UserId: str, SessionId: str) -> str:
+        text, usage = self.model_service.generate_with_usage(
+            self.PURPOSE,
+            prompt,
+            usage_context={
+                "TenantId": TenantId,
+                "UserId": UserId,
+                "SessionId": SessionId,
+            },
+        )
+        logger.info(
+            f"[tenant={TenantId}][session={SessionId}] "
+            f"Tokens -> Prompt: {usage.get('prompt_tokens')}, "
+            f"Completion: {usage.get('completion_tokens')}, "
+            f"Thoughts: {usage.get('thoughts_tokens')}, "
+            f"Cache: {usage.get('cache_tokens')}, "
+            f"total: {usage.get('total_tokens')}"
+        )
         if not text or not text.strip():
             raise ValueError(f"[tenant={TenantId}, session={SessionId}] Empty response received from model.")
         return text
     
-    def generate_sql(self, user_query: str, TenantId: str, SessionId: str) -> Dict:
+    def generate_sql(self, user_query: str, TenantId: str, UserId: str, SessionId: str) -> Dict:
         if not self.enabled:  
             raise RuntimeError(f"[SQL_GEN] Purpose '{self.PURPOSE}' not enabled for tenant={TenantId}")
        
@@ -67,7 +83,7 @@ class SQLQueryGenerator:
         
         try:
             text = retry_with_backoff(
-                lambda: self._safe_generate(prompt, TenantId, SessionId),
+                lambda: self._safe_generate(prompt, TenantId, UserId, SessionId),
                 max_retries=3,
                 initial_delay=1,)
             

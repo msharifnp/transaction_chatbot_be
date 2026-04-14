@@ -38,8 +38,9 @@ class SearchService:
          
     MAX_UI_ROWS = 5
     
-    def __init__(self, tenant_id: str = None):
+    def __init__(self, tenant_id: str = None, user_id: str = None):
         self.tenant_id = tenant_id
+        self.user_id = user_id
         self.db_config = DatabaseConfig.get_database_config()
         self.redis_config = RedisConfig.get_redis_config()
         self._init_services()
@@ -65,10 +66,11 @@ class SearchService:
     
     def search(self, query: str, TenantId: str, SessionId: str ) -> Dict[str, Any]:
         
-        self.redis_service.validate_tenant_session(TenantId, SessionId)
+        self.redis_service.validate_tenant_session(TenantId, self.user_id, SessionId)
         
         self.redis_service.store_message(
             TenantId=TenantId,
+            UserId=self.user_id,
             SessionId=SessionId,
             role="user",
             content=query,
@@ -77,7 +79,12 @@ class SearchService:
 
         logger.info(" Generating SQL Query with tenant filter...")
         try:
-            sql_result = self.sql_generator.generate_sql(query, TenantId=TenantId, SessionId=SessionId)
+            sql_result = self.sql_generator.generate_sql(
+                query,
+                TenantId=TenantId,
+                UserId=self.user_id,
+                SessionId=SessionId,
+            )
             sql = sql_result.get("sql")
         except Exception:
             logger.error("Error generating SQL query", exc_info=True)
@@ -119,6 +126,7 @@ class SearchService:
 
         system_index = self.redis_service.store_message(
             TenantId=TenantId,
+            UserId=self.user_id,
             SessionId=SessionId,
             role="system",
             content=json.dumps(rows, default=str),
@@ -139,11 +147,12 @@ class SearchService:
     
     def process_model_query(self, TenantId: str, SessionId: str, query: str, intent: str) -> Dict[str, Any]:
 
-        self.redis_service.validate_tenant_session(TenantId, SessionId)
+        self.redis_service.validate_tenant_session(TenantId, self.user_id, SessionId)
 
         try:
             self.redis_service.store_message(
                 TenantId=TenantId,
+                UserId=self.user_id,
                 SessionId=SessionId,
                 role="user",
                 content=query,
@@ -151,7 +160,7 @@ class SearchService:
             )
 
             system_data, _ = self.redis_service.get_context_for_ai(
-                TenantId, SessionId
+                TenantId, self.user_id, SessionId
             )
             logger.info(f"[AI MODE] Processing with {len(system_data)} stored rows")
 
@@ -161,11 +170,13 @@ class SearchService:
                     user_query=query,
                     rows=system_data,
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId
                 )
 
                 index = self.redis_service.store_message(
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId,
                     role="assistant",
                     content=analysis,
@@ -185,6 +196,7 @@ class SearchService:
                     user_query=query,
                     rows=system_data,
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId   
                 )
                 
@@ -193,6 +205,7 @@ class SearchService:
 
                 forecast_index = self.redis_service.store_message(
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId,
                     role="assistant",
                     content=forecast_text,
@@ -203,6 +216,7 @@ class SearchService:
                     user_query= query,
                     forecast_rows= forecast_rows,
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId
                 )
 
@@ -212,6 +226,7 @@ class SearchService:
 
                     chart_index = self.redis_service.store_message(
                         TenantId=TenantId,
+                        UserId=self.user_id,
                         SessionId=SessionId,
                         role="assistant",
                         content=svg,
@@ -238,6 +253,7 @@ class SearchService:
                     user_query=query,
                     rows=system_data,
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId
                 )
 
@@ -254,6 +270,7 @@ class SearchService:
 
                 index = self.redis_service.store_message(
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId,
                     role="assistant",
                     content=content,
@@ -273,11 +290,13 @@ class SearchService:
                     user_query=query,
                     rows= system_data,
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId
                 )
 
                 index = self.redis_service.store_message(
                     TenantId=TenantId,
+                    UserId=self.user_id,
                     SessionId=SessionId,
                     role="assistant",
                     content=analysis,
@@ -298,6 +317,7 @@ class SearchService:
 
             index = self.redis_service.store_message(
                 TenantId=TenantId,
+                UserId=self.user_id,
                 SessionId=SessionId,
                 role="assistant",
                 content=f"Error: {str(e)}",
@@ -342,7 +362,7 @@ class SearchService:
             if is_refresh_request(query):
                 logger.info("[REFRESH] User requested fresh data (YES/OK detected).")
                 
-                all_messages = self.redis_service.get_all_messages(TenantId, session_id) 
+                all_messages = self.redis_service.get_all_messages(TenantId, self.user_id, session_id) 
                 last_user_query = get_last_real_user_query(all_messages)
                 
                 if not last_user_query:
@@ -430,7 +450,12 @@ class SearchService:
             
             logger.info("Analyzing query for intelligent routing...")
             
-            routing_decision = self.router.intelligent_route(query, TenantId, session_id)
+            routing_decision = self.router.intelligent_route(
+                query,
+                TenantId,
+                self.user_id,
+                session_id,
+            )
             if routing_decision.get("router_error"):
                 error_detail = routing_decision.get("router_error_detail")
                 logger.error(f"[ROUTER]  Router failure: {error_detail}")
@@ -533,7 +558,7 @@ class SearchService:
             elif mode == "ai_cached":
                 logger.info("Executing AI_CACHED mode (checking cache for AI task)...")
                 
-                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
+                all_messages = self.redis_service.get_all_messages(TenantId, self.user_id, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages
@@ -608,7 +633,7 @@ class SearchService:
             elif mode == "filter_cached":
                 logger.info("Executing FILTER_CACHED mode (using last system data)...")
                 
-                all_messages = self.redis_service.get_all_messages(TenantId, session_id)
+                all_messages = self.redis_service.get_all_messages(TenantId, self.user_id, session_id)
                 has_cached_data = any(
                     msg.get("role") == "system" and bool(msg.get("content"))
                     for msg in all_messages

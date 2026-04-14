@@ -10,4 +10,6 @@ class ModelConfig:
     top_p: float 
     top_k: int 
     max_output_tokens: int 
+    purpose: Optional[str] = None
+    credentials_ref: Optional[str] = None
     extra_params: Optional[dict] = None

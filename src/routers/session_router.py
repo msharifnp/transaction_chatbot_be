@@ -9,7 +9,10 @@ router = APIRouter(prefix="/api/session", tags=["Session"])
 @router.post("/start")
 async def start_session_endpoint(request: Request):
     try:
-        return start_session(tenant_id=request.state.TenantId)
+        return start_session(
+            tenant_id=request.state.TenantId,
+            user_id=request.state.UserId,
+        )
     except Exception as e:
         logger.error("[SESSION START] Failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -21,6 +24,7 @@ async def end_session_endpoint(request: Request):
         session_id = getattr(request.state, "SessionId", None)
         return end_session(
             tenant_id=request.state.TenantId,
+            user_id=request.state.UserId,
             session_id=session_id
         )
     except Exception as e:

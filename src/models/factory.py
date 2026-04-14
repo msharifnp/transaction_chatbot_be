@@ -3,6 +3,7 @@ from src.models.base import BaseModelProvider
 from src.models.config import ModelConfig
 from src.models.providers.anthropic import AnthropicProvider
 from src.models.providers.gemini import GeminiProvider
+from src.models.providers.google_cloud_speech import GoogleCloudSpeechProvider
 from src.models.providers.openai import OpenAIProvider
 
 class ModelProviderFactory:
@@ -11,6 +12,7 @@ class ModelProviderFactory:
         "Gemini": GeminiProvider,
         "OpenAI": OpenAIProvider,
         "Anthropic": AnthropicProvider,
+        "Google Cloud": GoogleCloudSpeechProvider,
     }
     
     @classmethod

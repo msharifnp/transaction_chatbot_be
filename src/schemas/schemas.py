@@ -126,11 +126,9 @@ class ModelConfigUpsertRequest(BaseModel):
     Purpose: str = Field(..., max_length=100)
     Provider: str = Field(..., max_length=100)
     ModelName: str = Field(..., max_length=100)
-    ApiKey: str = Field(..., min_length=1)
-    Temperature: float
-    TopP: float
-    TopK: int
-    MaxOutputTokens: int
+    CredentialsRef: str = Field(default="")
+    SecretValue: Optional[str] = None
+    Config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelConfigData(BaseModel):
@@ -139,11 +137,8 @@ class ModelConfigData(BaseModel):
     Purpose: str
     Provider: str
     ModelName: str
-    ApiKey: str
-    Temperature: float
-    TopP: float
-    TopK: int
-    MaxOutputTokens: int
+    CredentialsRef: str
+    Config: Dict[str, Any] = Field(default_factory=dict)
     CreatedAt: Optional[str] = None
     UpdatedAt: Optional[str] = None
 
@@ -172,3 +167,36 @@ class ModelConfigOptionsData(BaseModel):
 
 class ModelConfigOptionsResponse(BaseResponse):
     data: ModelConfigOptionsData
+
+
+class VoiceTranscriptionData(BaseModel):
+    transcript: str
+    provider: str
+    model_name: str
+
+
+class VoiceTranscriptionResponse(BaseResponse):
+    data: Optional[VoiceTranscriptionData] = None
+
+
+class TokenConsumptionRecord(BaseModel):
+    UserId: str
+    FromDate: str
+    ToDate: str
+    Provider: str
+    InputTokens: int
+    OutputTokens: int
+    TotalTokens: int
+
+
+class TokenConsumptionListResponse(BaseResponse):
+    data: List[TokenConsumptionRecord] = Field(default_factory=list)
+
+
+class TokenConsumptionOptionsData(BaseModel):
+    UserIds: List[str] = Field(default_factory=list)
+    Providers: List[str] = Field(default_factory=list)
+
+
+class TokenConsumptionOptionsResponse(BaseResponse):
+    data: TokenConsumptionOptionsData

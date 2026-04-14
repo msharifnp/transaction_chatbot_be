@@ -34,11 +34,15 @@ def unified_search_endpoint(
     request: Request,
 ):
     tenant_id = request.state.TenantId
+    user_id = request.state.UserId
     session_id = request.state.SessionId
     session_created = request.state.SessionCreated
 
     try:
-        search_service = SearchService(tenant_id=tenant_id)
+        search_service = SearchService(
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         response = search_service.unified_search(req, session_id)
 
         if session_created:

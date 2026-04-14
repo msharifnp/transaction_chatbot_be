@@ -13,7 +13,8 @@ router = APIRouter(prefix="/api/comparison", tags=["Comparison"])
 def generate_comparison(req: ComparisonRequest, request: Request):
 
     TenantId = request.state.TenantId
-    comparison_service = ComparisonService(TenantId=TenantId)
+    UserId = request.state.UserId
+    comparison_service = ComparisonService(TenantId=TenantId, UserId=UserId)
     return comparison_service.compare_invoices(req=req)
 
 @router.get(
@@ -23,7 +24,8 @@ def generate_comparison(req: ComparisonRequest, request: Request):
 def download_comparison(file_id: int, request: Request):
 
     TenantId = request.state.TenantId
-    comparison_service = ComparisonService(TenantId=TenantId)
+    UserId = request.state.UserId
+    comparison_service = ComparisonService(TenantId=TenantId, UserId=UserId)
     
     file_info = comparison_service.download_file(
         file_id=file_id,

@@ -3,7 +3,8 @@ import time
 import csv
 import json
 import calendar
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional,Tuple
 from zoneinfo import ZoneInfo
 from src.config.field_constant import  MONTH_NAMES
@@ -24,6 +25,33 @@ def get_zone():
         return timezone(timedelta(hours=5, minutes=30))
 
 MAX_ROWS: int = int(os.getenv("MAX_ROWS"))
+
+
+class _DateFileHandler(logging.FileHandler):
+    def __init__(self, logs_dir: Path, encoding: str = "utf-8"):
+        self.logs_dir = logs_dir
+        self.logs_dir.mkdir(exist_ok=True)
+        self.current_date = date.today().isoformat()
+        super().__init__(self._get_log_file_path(), encoding=encoding)
+
+    def _get_log_file_path(self) -> str:
+        return str(self.logs_dir / f"{self.current_date}.log")
+
+    def emit(self, record):
+        today = date.today().isoformat()
+        if today != self.current_date:
+            self.current_date = today
+            self.baseFilename = self._get_log_file_path()
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+            if not self.delay:
+                self.stream = self._open()
+        super().emit(record)
+
+
+def get_date_file_handler(logs_dir: Path, encoding: str = "utf-8") -> logging.FileHandler:
+    return _DateFileHandler(logs_dir=logs_dir, encoding=encoding)
 
 def safe_serialize(value: Any) -> Any:
 

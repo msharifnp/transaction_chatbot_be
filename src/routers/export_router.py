@@ -13,6 +13,7 @@ def export_pdf(request: Request,
      
     req = ExportPdfRequest(index=index, title=title)
     return export_service.export_pdf_handler(TenantId=request.state.TenantId, 
+                                             UserId=request.state.UserId,
                                              SessionId=request.state.SessionId, 
                                              req=req)
 
@@ -24,6 +25,7 @@ def export_word(request: Request,
    
     req = ExportWordRequest(index=index, title=title)
     return export_service.export_word_handler(TenantId=request.state.TenantId, 
+                                              UserId=request.state.UserId,
                                               SessionId=request.state.SessionId, 
                                               req=req)
 
@@ -35,6 +37,7 @@ def export_excel(request: Request,
        
     req = ExportExcelRequest(index=index, sheet_name=sheet_name)
     return export_service.export_excel_handler(TenantId=request.state.TenantId, 
+                                               UserId=request.state.UserId,
                                                SessionId=request.state.SessionId, 
                                                req=req)
 
@@ -47,5 +50,6 @@ def export_png(request: Request,
     
     req = ExportPngRequest(index=index, width=width, height=height)
     return export_service.export_png_handler(TenantId=request.state.TenantId, 
+                                             UserId=request.state.UserId,
                                              SessionId=request.state.SessionId, 
                                              req=req)

@@ -15,13 +15,13 @@ def generate_session_id() -> str:
     return f"ivp-{random_part}-{timestamp}"
 
 
-def bootstrap_session(tenant_id: str) -> str:
+def bootstrap_session(tenant_id: str, user_id: str | None = None) -> str:
     session_id = generate_session_id()
     model_startup.get_or_create_service(tenant_id)
     return session_id
 
 
-def start_session(tenant_id: str) -> dict:
+def start_session(tenant_id: str, user_id: str) -> dict:
 
     session_id = generate_session_id()
     redis_service = RedisService(RedisConfig.get_redis_config())
@@ -47,6 +47,7 @@ def start_session(tenant_id: str) -> dict:
     return {
         "success": True,
         "TenantId": tenant_id,
+        "UserId": user_id,
         "SessionId": session_id,
         "active_sessions": active_count,
         "models": models_info,
@@ -54,10 +55,10 @@ def start_session(tenant_id: str) -> dict:
     }
 
 
-def end_session(tenant_id: str, session_id: str) -> dict:
+def end_session(tenant_id: str, user_id: str, session_id: str) -> dict:
    
     redis_service = RedisService(RedisConfig.get_redis_config())
-    deleted = redis_service.delete_session(tenant_id, session_id)
+    deleted = redis_service.delete_session(tenant_id, user_id, session_id)
 
     logger.info(
         "[SESSION]  Deleted %s Redis keys for session %s",
@@ -67,6 +68,7 @@ def end_session(tenant_id: str, session_id: str) -> dict:
     return {
         "success": True,
         "TenantId": tenant_id,
+        "UserId": user_id,
         "SessionId": session_id,
         "message": "Session ended and data removed from Redis"
     }
